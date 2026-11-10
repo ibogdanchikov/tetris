@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "orchestrator",
+  "agents": {
+    "orchestrator": {
+      "mode": "primary",
+      "model": "openrouter/anthropic/claude-opus-5.5",
+      "description": "Architect and technical lead",
+      "system": "You are the technical lead. Plan the architecture and break work into small tasks. Delegate research to explore and code implementation to general. Review code, build results, and tests. Delegate corrections when needed. Do not implement features yourself, including through shell commands.",
+      "permissions": [
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    },
+    "general": {
+      "mode": "subagent",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash-1017",
+      "description": "Implements code, fixes bugs and runs tests"
+    },
+    "explore": {
+      "mode": "subagent",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash-1017",
+      "description": "Researches and explores the codebase"
+    }
+  }
+}
+
