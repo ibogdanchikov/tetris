@@ -18,6 +18,7 @@ typedef enum GameAction {
     ACTION_HARD_DROP = 1u << 3,
     ACTION_ROTATE_CW = 1u << 4,
     ACTION_ROTATE_CCW = 1u << 5,
+    ACTION_HOLD = 1u << 6,
 } GameAction;
 
 typedef struct GameInput {

@@ -33,7 +33,10 @@ extern int test_failures;
         }                                                                        \
     } while (0)
 
-/* Suites defined in tests/test_piece.c, tests/test_game.c and tests/test_input_buffer.c. */
+/* Suites defined in tests/test_piece.c, tests/test_game.c, tests/test_rules.c,
+   tests/test_input_buffer.c and tests/test_font.c. */
 void test_piece_suite(void);
 void test_game_suite(void);
+void test_rules_suite(void);
 void test_input_suite(void);
+void test_font_suite(void);

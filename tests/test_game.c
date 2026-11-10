@@ -38,16 +38,31 @@ static void game_place_piece(GameState *game, PieceType type, int rotation, int 
     game->piece.x = (int8_t)x;
     game->piece.y = (int8_t)y;
     game->grounded = false;
-    game->gravity_counter = 0;
+    game->gravity_accum = 0;
     game->lock_counter = 0;
     game->lock_resets = 0;
     game->shift_dir = 0;
     game->shift_counter = 0;
+    game->last_kick_index = 0;
+    game->last_action_was_rotation = false;
 
     /* Mirror what game_step would compute, so the piece starts out grounded. */
     ActivePiece below = game->piece;
     below.y = (int8_t)(below.y - 1);
     game->grounded = !game_piece_fits(&game->board, &below);
+
+    /* The lock delay budget only refreshes when a new lowest row is reached, so
+       the baseline has to be the row the piece is placed on. */
+    int xs[4];
+    int ys[4];
+    game_piece_cells(&game->piece, xs, ys);
+    int lowest = ys[0];
+    for (int i = 1; i < 4; ++i) {
+        if (ys[i] < lowest) {
+            lowest = ys[i];
+        }
+    }
+    game->lowest_y = (int8_t)lowest;
 }
 
 /*
@@ -121,7 +136,15 @@ static void test_game_init_state(void)
     CHECK_EQ_INT(first.piece.rotation, 0);
     CHECK_EQ_INT(first.lines_cleared, 0);
     CHECK_EQ_INT(first.last_clear_count, 0);
-    CHECK(!first.topped_out);
+    CHECK_EQ_INT(first.cleared_row_count, 0);
+    CHECK_EQ_INT(first.score, 0);
+    CHECK_EQ_INT(first.level, 1);
+    CHECK_EQ_INT(first.start_level, 1);
+    CHECK_EQ_INT(first.events, 0);
+    CHECK(!first.has_hold);
+    CHECK(!first.hold_used);
+    CHECK(!first.game_over);
+    CHECK_EQ_INT(first.game_over_reason, GAME_OVER_NONE);
 
     /* The board starts empty and the state is fully deterministic. */
     CHECK_EQ_INT(count_filled_cells(&first.board), 0);
@@ -154,7 +177,7 @@ static void check_spawn_columns(PieceType type, int expected_min_x, int expected
 {
     GameState game;
     game_init(&game, 1);
-    game.next_piece = type;
+    game.next_queue[0] = type;
     game_spawn_next(&game);
 
     CHECK_EQ_INT(game.piece.type, type);
@@ -169,7 +192,7 @@ static void check_spawn_columns(PieceType type, int expected_min_x, int expected
     CHECK_EQ_INT(min_x, expected_min_x);
     CHECK_EQ_INT(max_x, expected_max_x);
     CHECK_EQ_INT(min_y, BOARD_VISIBLE_HEIGHT - 1);
-    CHECK(!game.topped_out);
+    CHECK(!game.game_over);
 }
 
 static void test_game_spawn_columns(void)
@@ -179,7 +202,7 @@ static void test_game_spawn_columns(void)
     check_spawn_columns(PIECE_T, 3, 5);
 }
 
-static void test_game_spawn_topped_out(void)
+static void test_game_spawn_block_out(void)
 {
     GameState game;
     game_init(&game, 5);
@@ -189,10 +212,11 @@ static void test_game_spawn_topped_out(void)
         board_set(&game.board, x, BOARD_VISIBLE_HEIGHT - 1, CELL_T);
         board_set(&game.board, x, BOARD_VISIBLE_HEIGHT, CELL_T);
     }
-    game.next_piece = PIECE_T;
+    game.next_queue[0] = PIECE_T;
     game_spawn_next(&game);
 
-    CHECK(game.topped_out);
+    CHECK(game.game_over);
+    CHECK_EQ_INT(game.game_over_reason, GAME_OVER_BLOCK_OUT);
     CHECK_EQ_INT(game.piece.type, PIECE_T);
 
     /* From here on, steps only advance the tick counter. */
@@ -217,7 +241,7 @@ static void test_game_step_advances_ticks(void)
         game_step(&game, &none);
         CHECK_EQ_INT(game.tick, i + 1);
     }
-    CHECK(!game.topped_out);
+    CHECK(!game.game_over);
 }
 
 static void test_game_gravity(void)
@@ -227,17 +251,20 @@ static void test_game_gravity(void)
     const GameInput none = input_none();
     const int start_y = game.piece.y;
 
+    /*
+     * Level 1 gravity is 1092/65536 of a row per tick, so 60 ticks leave the
+     * accumulator just short of a whole row and the first fall happens on tick
+     * 61. The second fall is 60 ticks later again, on tick 121.
+     */
     for (int tick = 1; tick <= 130; ++tick) {
         game_step(&game, &none);
-        if (tick == 59) {
+        if (tick == 60) {
             CHECK_EQ_INT(game.piece.y, start_y);
-        } else if (tick == 60) {
-            CHECK_EQ_INT(game.piece.y, start_y - 1);
-        } else if (tick == 100) {
-            CHECK_EQ_INT(game.piece.y, start_y - 1);
-        } else if (tick == 119) {
+        } else if (tick == 61) {
             CHECK_EQ_INT(game.piece.y, start_y - 1);
         } else if (tick == 120) {
+            CHECK_EQ_INT(game.piece.y, start_y - 1);
+        } else if (tick == 121) {
             CHECK_EQ_INT(game.piece.y, start_y - 2);
         }
     }
@@ -314,7 +341,7 @@ static void test_game_hard_drop(void)
     const GameInput drop = input_press(ACTION_HARD_DROP);
 
     const PieceType dropped_type = game.piece.type;
-    const PieceType preview = game.next_piece;
+    const PieceType preview = game.next_queue[0];
     const uint32_t serial = game.piece_serial;
 
     game_step(&game, &drop);
@@ -326,7 +353,7 @@ static void test_game_hard_drop(void)
     CHECK_EQ_INT(count_filled_cells(&game.board), 4);
     CHECK_EQ_INT(game.lines_cleared, 0);
     CHECK_EQ_INT(game.last_clear_count, 0);
-    CHECK(!game.topped_out);
+    CHECK(!game.game_over);
     check_piece_landed_on_floor(&game.board, dropped_type);
 }
 
@@ -471,7 +498,7 @@ static int check_wall_push(PieceType type, int rotation, uint32_t action, bool e
         }
     }
     CHECK_EQ_INT(edge, expect_left ? 0 : BOARD_WIDTH - 1);
-    CHECK(!game.topped_out);
+    CHECK(!game.game_over);
 
     return game.piece.x;
 }
@@ -609,33 +636,35 @@ static void test_game_rotation(void)
     CHECK_EQ_INT(game.piece.rotation, 0);
 }
 
-static void test_game_rotation_is_rejected_when_blocked(void)
+/*
+ * A rotation that is blocked in place still has the wall kicks to try, and if
+ * every one of them fails the piece must be left exactly where it was. The T is
+ * boxed into a 3x3 hole with no room for any of the five offsets.
+ */
+static void test_game_rotation_all_kicks_fail(void)
 {
     GameState game;
     game_init(&game, 3);
     const GameInput cw = input_press(ACTION_ROTATE_CW);
 
-    /* T rotated clockwise would need (4, 5), which is occupied. */
     game_place_piece(&game, PIECE_T, 0, 3, 5);
-    CHECK(board_set(&game.board, 4, 5, CELL_S));
+
+    /* Fill rows 3..8 of columns 3..5 except the T's own four cells. */
+    for (int y = 3; y <= 8; ++y) {
+        for (int x = 3; x <= 5; ++x) {
+            const bool own = (x == 4 && y == 7) || (y == 6 && x >= 3 && x <= 5);
+            if (!own) {
+                CHECK(board_set(&game.board, x, y, CELL_S));
+            }
+        }
+    }
+
     game_step(&game, &cw);
     CHECK_EQ_INT(game.piece.rotation, 0);
     CHECK_EQ_INT(game.piece.x, 3);
     CHECK_EQ_INT(game.piece.y, 5);
-}
-
-static void test_game_rotation_has_no_kicks(void)
-{
-    GameState game;
-    game_init(&game, 3);
-    const GameInput cw = input_press(ACTION_ROTATE_CW);
-
-    /* Vertical I in the rightmost column: rotating flat would need column 10. */
-    game_place_piece(&game, PIECE_I, 1, 7, 3);
-    game_step(&game, &cw);
-    CHECK_EQ_INT(game.piece.rotation, 1);
-    CHECK_EQ_INT(game.piece.x, 7);
-    CHECK_EQ_INT(game.piece.y, 3);
+    CHECK((game.events & GAME_EVENT_ROTATE) == 0);
+    CHECK((game.events & GAME_EVENT_KICK) == 0);
 }
 
 static void test_game_lock_delay(void)
@@ -770,7 +799,7 @@ static GameInput test_random_input(TestInputRng *generator)
     const uint32_t previous = generator->held;
     uint32_t held = previous;
     if ((roll & 7u) == 0) {
-        held ^= 1u << (uint32_t)((roll >> 3) % 6u);
+        held ^= 1u << (uint32_t)((roll >> 3) % 7u);
     }
     generator->held = held;
 
@@ -788,12 +817,16 @@ static void test_game_replay_is_deterministic(void)
     TestInputRng first_generator = { 99, 0 };
     TestInputRng second_generator = { 99, 0 };
 
+    int holds = 0;
     for (int tick = 0; tick < 5000; ++tick) {
         const GameInput first_input = test_random_input(&first_generator);
         const GameInput second_input = test_random_input(&second_generator);
         CHECK(memcmp(&first_input, &second_input, sizeof first_input) == 0);
         game_step(&first, &first_input);
         game_step(&second, &second_input);
+        if ((first.events & GAME_EVENT_HOLD) != 0) {
+            ++holds;
+        }
     }
 
     CHECK_EQ_INT(first.tick, 5000);
@@ -801,7 +834,9 @@ static void test_game_replay_is_deterministic(void)
 
     /* The run must have done something, not just idled. */
     CHECK(first.piece_serial > 10);
-    CHECK(first.lines_cleared > 0 || first.topped_out);
+    CHECK(first.lines_cleared > 0 || first.game_over);
+    /* And the random player really did reach for the hold key. */
+    CHECK(holds > 0);
 }
 
 void test_game_suite(void)
@@ -809,7 +844,7 @@ void test_game_suite(void)
     test_game_init_state();
     test_game_first_piece_is_visible();
     test_game_spawn_columns();
-    test_game_spawn_topped_out();
+    test_game_spawn_block_out();
     test_game_step_advances_ticks();
     test_game_gravity();
     test_game_soft_drop();
@@ -823,8 +858,7 @@ void test_game_suite(void)
     test_game_das_and_arr();
     test_game_both_directions();
     test_game_rotation();
-    test_game_rotation_is_rejected_when_blocked();
-    test_game_rotation_has_no_kicks();
+    test_game_rotation_all_kicks_fail();
     test_game_lock_delay();
     test_game_move_resets_lock_delay();
     test_game_lock_resets_are_capped();

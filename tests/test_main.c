@@ -8,6 +8,7 @@
 #include "core/board.h"
 #include "core/rng.h"
 #include "render/board_layout.h"
+#include "render/font.h"
 #include "test_harness.h"
 
 int test_failures;
@@ -224,78 +225,181 @@ static void test_rng_determinism(void)
     CHECK_EQ_INT(out_of_range, 0);
 }
 
+static bool layout_rects_overlap(LayoutRect a, LayoutRect b)
+{
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+static void check_rect_within(LayoutRect rect, float fb_w, float fb_h)
+{
+    CHECK(rect.w > 0.0f);
+    CHECK(rect.h > 0.0f);
+    CHECK(rect.x >= 0.0f);
+    CHECK(rect.y >= 0.0f);
+    CHECK(rect.x + rect.w <= fb_w);
+    CHECK(rect.y + rect.h <= fb_h);
+}
+
+/*
+ * Every rect is inside the framebuffer, the group is centred, the board and the
+ * two panels have a one-cell gap between them and the panel contents sit where
+ * the HUD expects them. Call it only with a framebuffer at least 22x22 pixels,
+ * the documented minimum for the whole group to fit.
+ */
 static void check_layout_fits(int fb_w, int fb_h)
 {
     const BoardLayout layout = board_layout_compute(fb_w, fb_h);
+    const float framebuffer_w = (float)fb_w;
+    const float framebuffer_h = (float)fb_h;
+    const int group_cells = 2 * LAYOUT_PANEL_CELLS + BOARD_WIDTH + 2;
 
     CHECK(layout.cell_size >= 1);
     CHECK_EQ_INT(layout.width, layout.cell_size * BOARD_WIDTH);
     CHECK_EQ_INT(layout.height, layout.cell_size * BOARD_VISIBLE_HEIGHT);
-
-    /* Square cells: the pixel size is an exact multiple of the cell size. */
     CHECK_EQ_INT(layout.width % layout.cell_size, 0);
     CHECK_EQ_INT(layout.height % layout.cell_size, 0);
+    CHECK_EQ_INT(layout.text_pixel, layout.cell_size / 8 > 0 ? layout.cell_size / 8 : 1);
 
-    /* The panel is a square 4x4 cells, one cell to the right of the playfield. */
-    CHECK_EQ_INT(layout.panel_size, layout.cell_size * 4);
-    CHECK(layout.panel_x >= layout.origin_x + (float)layout.width + (float)layout.cell_size);
-
-    /* Roughly one cell of margin: playfield + gap + panel + two cells must fit. */
-    const int group_width = layout.width + layout.cell_size + layout.panel_size;
-    CHECK((float)(group_width + 2 * layout.cell_size) <= (float)fb_w);
-    CHECK((float)layout.cell_size * (float)(BOARD_VISIBLE_HEIGHT + 2) <= (float)fb_h);
+    /* The group plus one cell of margin on each side fits both directions. */
+    CHECK(group_cells * layout.cell_size + 2 * layout.cell_size <= fb_w);
+    CHECK(layout.height + 2 * layout.cell_size <= fb_h);
 
     /* The whole group is centred within a pixel of rounding. */
-    const long centred_x = (long)(layout.origin_x * 2.0f) + group_width;
+    const long centred_x = (long)(layout.left_panel.x * 2.0f) + group_cells * layout.cell_size;
     const long centred_y = (long)(layout.origin_y * 2.0f) + layout.height;
     CHECK(centred_x - fb_w <= 1 && fb_w - centred_x <= 1);
     CHECK(centred_y - fb_h <= 1 && fb_h - centred_y <= 1);
 
-    /* The panel is top-aligned with the playfield and inside the framebuffer. */
-    CHECK(layout.panel_y >= layout.origin_y);
-    CHECK(layout.panel_y + (float)layout.panel_size <= layout.origin_y + (float)layout.height);
-}
+    const LayoutRect board = { layout.origin_x, layout.origin_y, (float)layout.width,
+                               (float)layout.height };
+    check_rect_within(board, framebuffer_w, framebuffer_h);
+    check_rect_within(layout.left_panel, framebuffer_w, framebuffer_h);
+    check_rect_within(layout.right_panel, framebuffer_w, framebuffer_h);
+    check_rect_within(layout.hold_box, framebuffer_w, framebuffer_h);
+    check_rect_within(layout.stats_area, framebuffer_w, framebuffer_h);
+    check_rect_within(layout.next_box, framebuffer_w, framebuffer_h);
 
-static void check_layout_within_framebuffer(int fb_w, int fb_h)
-{
-    const BoardLayout layout = board_layout_compute(fb_w, fb_h);
-    CHECK(layout.origin_x >= 0.0f);
-    CHECK(layout.origin_y >= 0.0f);
-    CHECK(layout.origin_x + (float)layout.width <= (float)fb_w);
-    CHECK(layout.origin_y + (float)layout.height <= (float)fb_h);
+    /* One whole cell of gap between the board and each panel. */
+    CHECK(layout.origin_x - (layout.left_panel.x + layout.left_panel.w) >=
+          (float)layout.cell_size - 0.01f);
+    CHECK(layout.right_panel.x - (layout.origin_x + (float)layout.width) >=
+          (float)layout.cell_size - 0.01f);
 
-    CHECK(layout.panel_x >= 0.0f);
-    CHECK(layout.panel_y >= 0.0f);
-    CHECK(layout.panel_x + (float)layout.panel_size <= (float)fb_w);
-    CHECK(layout.panel_y + (float)layout.panel_size <= (float)fb_h);
+    CHECK(!layout_rects_overlap(board, layout.left_panel));
+    CHECK(!layout_rects_overlap(board, layout.right_panel));
+    CHECK(!layout_rects_overlap(layout.left_panel, layout.right_panel));
 
-    /* Panel and playfield must not overlap. */
-    CHECK(layout.panel_x >= layout.origin_x + (float)layout.width);
+    /* Panels are four cells wide and top-aligned with the board. */
+    CHECK_EQ_INT((int)layout.left_panel.w, LAYOUT_PANEL_CELLS * layout.cell_size);
+    CHECK_EQ_INT((int)layout.right_panel.w, LAYOUT_PANEL_CELLS * layout.cell_size);
+    CHECK(layout.left_panel.y + layout.left_panel.h <=
+          layout.origin_y + (float)layout.height + 0.01f);
+    CHECK(layout.right_panel.y + layout.right_panel.h <=
+          layout.origin_y + (float)layout.height + 0.01f);
+
+    /* Hold box at the top of the left panel, stats in the space below it. */
+    CHECK_EQ_INT((int)layout.hold_box.w, LAYOUT_PANEL_CELLS * layout.cell_size);
+    CHECK_EQ_INT((int)layout.hold_box.h, LAYOUT_HOLD_BOX_CELLS * layout.cell_size);
+    CHECK(layout.hold_box.x >= layout.left_panel.x - 0.01f);
+    CHECK(layout.hold_box.y >= layout.left_panel.y - 0.01f);
+    CHECK(layout.hold_box.y + layout.hold_box.h <=
+          layout.left_panel.y + layout.left_panel.h + 0.01f);
+    CHECK(layout.stats_area.y + layout.stats_area.h <= layout.hold_box.y + 0.01f);
+    CHECK(layout.stats_area.x >= layout.left_panel.x - 0.01f);
+    CHECK(layout.stats_area.x + layout.stats_area.w <=
+          layout.left_panel.x + layout.left_panel.w + 0.01f);
+
+    /* Next box at the top of the right panel; slots stack downwards from it. */
+    CHECK_EQ_INT((int)layout.next_box.w, LAYOUT_PANEL_CELLS * layout.cell_size);
+    CHECK_EQ_INT((int)layout.next_box.h, LAYOUT_NEXT_BOX_CELLS * layout.cell_size);
+    CHECK(layout.next_box.y + layout.next_box.h <=
+          layout.right_panel.y + layout.right_panel.h + 0.01f);
+    for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
+        check_rect_within(layout.next_slots[i], framebuffer_w, framebuffer_h);
+        CHECK(layout.next_slots[i].x >= layout.next_box.x - 0.01f);
+        CHECK(layout.next_slots[i].x + layout.next_slots[i].w <=
+              layout.next_box.x + layout.next_box.w + 0.01f);
+        CHECK(layout.next_slots[i].y >= layout.next_box.y - 0.01f);
+        CHECK(layout.next_slots[i].y + layout.next_slots[i].h <=
+              layout.next_box.y + layout.next_box.h + 0.01f);
+        if (i > 0) {
+            CHECK(layout.next_slots[i].y + layout.next_slots[i].h <=
+                  layout.next_slots[i - 1].y + 0.01f);
+        }
+    }
+
+    /*
+     * The widest possible score fits the stats panel from a cell size of 16
+     * pixels up (a 352x352 framebuffer): ten 5-pixel glyphs plus gaps need 59
+     * pixels and a four-cell panel has 60 after padding. Below that the font
+     * simply has no room, so only the shrink helper is checked.
+     */
+    const int pad = layout.cell_size / 8 > 0 ? layout.cell_size / 8 : 1;
+    const int value_width = (int)layout.stats_area.w - 2 * pad;
+    const int value_pixel =
+        board_layout_fit_text_pixel(value_width, 10, layout.text_pixel);
+    CHECK(value_pixel >= 1);
+    if (layout.cell_size >= 16) {
+        CHECK(font_text_width("4294967295", value_pixel) <= value_width);
+    }
+
+    /*
+     * Previews are drawn with their own smaller cell. Four-wide pieces keep a
+     * visible gap inside the four-cell boxes and two-tall pieces keep one in a
+     * slot, so no preview touches a frame or the label above it.
+     */
+    CHECK(layout.preview_cell_size >= 1);
+    CHECK(layout.preview_cell_size <= layout.cell_size);
+    CHECK(4 * layout.preview_cell_size <= (int)layout.hold_box.w);
+    CHECK(4 * layout.preview_cell_size <= (int)layout.next_box.w);
+    CHECK(2 * layout.preview_cell_size <= (int)layout.next_slots[0].h);
+    CHECK(layout.next_slots[0].y + layout.next_slots[0].h <=
+          layout.next_box.y + layout.next_box.h - (float)layout.cell_size + 0.01f);
+
+    /* From two-pixel cells up the I really has a pixel of padding per side. */
+    if (layout.cell_size >= 2) {
+        CHECK((int)layout.hold_box.w - 4 * layout.preview_cell_size >= 2);
+        CHECK((int)layout.next_box.w - 4 * layout.preview_cell_size >= 2);
+        for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
+            CHECK(2 * layout.preview_cell_size <= (int)layout.next_slots[i].h - 1);
+        }
+        CHECK(2 * layout.preview_cell_size <=
+              (int)layout.hold_box.h - layout.cell_size);
+    }
 }
 
 static void test_board_layout(void)
 {
+    /* 22x22 is the documented minimum: 20 cells plus one cell of margin. */
+    check_layout_fits(22, 22);
     check_layout_fits(800, 600);
-    check_layout_fits(1920, 1080);
-    check_layout_fits(300, 1000);
     check_layout_fits(1280, 720);
+    check_layout_fits(1920, 1080);
     check_layout_fits(640, 480);
     check_layout_fits(420, 900);
     check_layout_fits(500, 700);
+    check_layout_fits(300, 1000);
+    check_layout_fits(3000, 300);
 
-    check_layout_within_framebuffer(800, 600);
-    check_layout_within_framebuffer(1920, 1080);
-    check_layout_within_framebuffer(300, 1000);
-    check_layout_within_framebuffer(1280, 720);
-    check_layout_within_framebuffer(420, 900);
-    check_layout_within_framebuffer(500, 700);
-
-    /* A 1x1 framebuffer cannot hold a 10x20 playfield, but must stay sane. */
+    /*
+     * A 1x1 framebuffer cannot hold the group, but every rect must still have a
+     * sane size and keep the one-cell gaps.
+     */
     const BoardLayout tiny = board_layout_compute(1, 1);
     CHECK_EQ_INT(tiny.cell_size, 1);
     CHECK_EQ_INT(tiny.width, BOARD_WIDTH);
     CHECK_EQ_INT(tiny.height, BOARD_VISIBLE_HEIGHT);
-    CHECK_EQ_INT(tiny.panel_size, 4);
+    CHECK_EQ_INT(tiny.left_panel.w, LAYOUT_PANEL_CELLS);
+    CHECK_EQ_INT(tiny.right_panel.w, LAYOUT_PANEL_CELLS);
+    CHECK_EQ_INT(tiny.hold_box.h, LAYOUT_HOLD_BOX_CELLS);
+    CHECK_EQ_INT(tiny.next_box.h, LAYOUT_NEXT_BOX_CELLS);
+    CHECK_EQ_INT(tiny.preview_cell_size, 1);
+    CHECK(tiny.origin_x - (tiny.left_panel.x + tiny.left_panel.w) == 1.0f);
+    CHECK(tiny.right_panel.x - (tiny.origin_x + (float)tiny.width) == 1.0f);
+    for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
+        CHECK(tiny.next_slots[i].w > 0.0f);
+        CHECK(tiny.next_slots[i].h > 0.0f);
+    }
 
     /* Degenerate sizes must not divide by zero or go negative. */
     const BoardLayout zero = board_layout_compute(0, 0);
@@ -304,29 +408,16 @@ static void test_board_layout(void)
     CHECK_EQ_INT(negative.cell_size, 1);
 }
 
-/*
- * The panel only fully fits from 17x22 pixels up: 10 playfield columns, a one
- * cell gap, the 4 cell panel and one cell of margin on both sides.
- */
-static void test_board_layout_panel_minimum(void)
+static void test_layout_fit_text_pixel(void)
 {
-    const BoardLayout minimal = board_layout_compute(17, 22);
-    CHECK_EQ_INT(minimal.cell_size, 1);
-    CHECK_EQ_INT(minimal.panel_size, 4);
-    CHECK(minimal.panel_x + (float)minimal.panel_size <= 17.0f);
-    CHECK(minimal.panel_y + (float)minimal.panel_size <= 22.0f);
-    CHECK(minimal.panel_x >= minimal.origin_x + (float)minimal.width + 1.0f);
-
-    /* Below the minimum the layout may overflow, but it stays consistent. */
-    for (int fb_w = 1; fb_w < 17; ++fb_w) {
-        for (int fb_h = 1; fb_h < 22; ++fb_h) {
-            const BoardLayout layout = board_layout_compute(fb_w, fb_h);
-            CHECK_EQ_INT(layout.cell_size, 1);
-            CHECK_EQ_INT(layout.panel_size, 4);
-            CHECK_EQ_INT(layout.width, BOARD_WIDTH);
-            CHECK(layout.panel_x >= layout.origin_x + (float)layout.width);
-        }
-    }
+    CHECK_EQ_INT(board_layout_fit_text_pixel(1000, 1, 3), 3);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(15, 1, 3), 3);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(14, 1, 3), 2);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(0, 5, 3), 1);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(102, 10, 3), 1);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(118, 10, 3), 2);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(1000, 0, 7), 7);
+    CHECK_EQ_INT(board_layout_fit_text_pixel(1000, 1, 0), 1);
 }
 
 int main(void)
@@ -343,10 +434,12 @@ int main(void)
     test_board_clear_buffer_row();
     test_rng_determinism();
     test_board_layout();
-    test_board_layout_panel_minimum();
+    test_layout_fit_text_pixel();
     test_piece_suite();
     test_game_suite();
+    test_rules_suite();
     test_input_suite();
+    test_font_suite();
 
     if (test_failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", test_failures);

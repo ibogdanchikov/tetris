@@ -128,7 +128,7 @@ static void test_tap_left_moves_one_column(void)
 
     CHECK_EQ_INT(game.piece.x, start_x - 1);
     CHECK_EQ_INT(game.piece.rotation, 0);
-    CHECK(!game.topped_out);
+    CHECK(!game.game_over);
 }
 
 /* Holding the key after the tap must not turn it into repeated presses. */

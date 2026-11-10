@@ -21,15 +21,20 @@ uint32_t app_input_action(SDL_Scancode scancode);
 typedef struct AppInputCommands {
     bool quit;
     bool restart;
+    bool pause_toggle;
+    bool focus_lost;
 } AppInputCommands;
 
 /*
  * Applies one SDL event: game keys go to the buffer as actions, Escape and the
- * quit event set commands->quit, R sets commands->restart, and losing focus
- * clears the buffer so no key stays stuck down.
+ * quit event set commands->quit, R sets commands->restart, P sets
+ * commands->pause_toggle, and losing focus clears the buffer so no key stays
+ * stuck down and sets commands->focus_lost.
  *
- * OS key repeat is ignored: DAS/ARR inside the game produce the repeats, and a
- * platform repeat would look like a fresh press every time.
+ * Whether a lost focus pauses the game is the app's decision, not this layer's:
+ * a finished run has nothing to pause. OS key repeat is ignored: DAS/ARR inside
+ * the game produce the repeats, and a platform repeat would look like a fresh
+ * press every time.
  */
 void app_input_handle_event(InputBuffer *buffer, const SDL_Event *event,
                             AppInputCommands *commands);

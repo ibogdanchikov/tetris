@@ -17,7 +17,6 @@ static const Color BOARD_VIEW_PALETTE[CELL_TYPE_COUNT] = {
 static const Color BOARD_VIEW_FRAME_COLOR = { 0.32f, 0.32f, 0.38f, 1.0f };
 static const Color BOARD_VIEW_GRID_COLOR = { 0.13f, 0.13f, 0.16f, 1.0f };
 static const Color BOARD_VIEW_EMPTY_COLOR = { 0.06f, 0.06f, 0.08f, 1.0f };
-static const Color BOARD_VIEW_OVERLAY_COLOR = { 0.00f, 0.00f, 0.00f, 0.60f };
 
 /* Inset of a cell's fill inside its grid slot, so the grid lines stay visible. */
 #define BOARD_VIEW_CELL_INSET 0.06f
@@ -127,20 +126,19 @@ static void board_view_draw_piece(Renderer *renderer, const BoardLayout *layout,
     }
 }
 
-/*
- * The panel is a 4x4 cell box. The preview is centred by its own drawn extent,
- * not by the piece's SRS box: a flat I is one cell tall inside a 4x4 box, and
- * centring the box would leave it off-centre in the panel.
- */
-static void board_view_draw_next_panel(Renderer *renderer, const BoardLayout *layout,
-                                       const GameState *game)
+Color board_view_cell_color(CellType type)
 {
-    const float cell = (float)layout->cell_size;
-    board_view_draw_frame(renderer, layout->panel_x, layout->panel_y, layout->panel_size,
-                          layout->panel_size, cell);
+    if ((unsigned)type >= (unsigned)CELL_TYPE_COUNT) {
+        return BOARD_VIEW_PALETTE[CELL_EMPTY];
+    }
+    return BOARD_VIEW_PALETTE[type];
+}
 
+void board_view_draw_preview(Renderer *renderer, LayoutRect box, int cell_size, PieceType type,
+                             Color color)
+{
     PieceCell cells[4];
-    piece_cells(game->next_piece, 0, cells);
+    piece_cells(type, 0, cells);
 
     int min_x = cells[0].x;
     int max_x = cells[0].x;
@@ -161,17 +159,13 @@ static void board_view_draw_next_panel(Renderer *renderer, const BoardLayout *la
         }
     }
 
-    const float panel_cells = (float)layout->panel_size / cell;
-    const float left = (panel_cells - (float)(max_x - min_x + 1)) * 0.5f;
-    const float bottom = (panel_cells - (float)(max_y - min_y + 1)) * 0.5f;
-    const Color color = BOARD_VIEW_PALETTE[piece_cell_type(game->next_piece)];
+    const float cell = (float)cell_size;
+    const float left = box.x + (box.w - (float)(max_x - min_x + 1) * cell) * 0.5f;
+    const float bottom = box.y + (box.h - (float)(max_y - min_y + 1) * cell) * 0.5f;
 
     for (int i = 0; i < 4; ++i) {
-        const float px = layout->panel_x +
-                         (left + (float)(cells[i].x - min_x)) * cell;
-        const float py = layout->panel_y +
-                         (bottom + (float)(cells[i].y - min_y)) * cell;
-        board_view_push_cell(renderer, px, py, cell, color);
+        board_view_push_cell(renderer, left + (float)(cells[i].x - min_x) * cell,
+                             bottom + (float)(cells[i].y - min_y) * cell, cell, color);
     }
 }
 
@@ -192,11 +186,4 @@ void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameSt
     board_view_draw_ghost(renderer, layout, game);
     board_view_draw_piece(renderer, layout, game);
     renderer_clear_clip(renderer);
-
-    board_view_draw_next_panel(renderer, layout, game);
-
-    if (game->topped_out) {
-        renderer_push_rect(renderer, layout->origin_x, layout->origin_y, (float)layout->width,
-                           (float)layout->height, BOARD_VIEW_OVERLAY_COLOR);
-    }
 }

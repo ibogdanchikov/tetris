@@ -17,6 +17,9 @@ uint32_t app_input_action(SDL_Scancode scancode)
     case SDL_SCANCODE_Z:
     case SDL_SCANCODE_LCTRL:
         return ACTION_ROTATE_CCW;
+    case SDL_SCANCODE_C:
+    case SDL_SCANCODE_LSHIFT:
+        return ACTION_HOLD;
     default:
         return 0;
     }
@@ -33,6 +36,7 @@ void app_input_handle_event(InputBuffer *buffer, const SDL_Event *event,
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         /* Key-up events go to the window that got the focus, not to us. */
         input_buffer_reset(buffer);
+        commands->focus_lost = true;
         break;
 
     case SDL_EVENT_KEY_DOWN: {
@@ -46,6 +50,8 @@ void app_input_handle_event(InputBuffer *buffer, const SDL_Event *event,
             commands->quit = true;
         } else if (event->key.scancode == SDL_SCANCODE_R) {
             commands->restart = true;
+        } else if (event->key.scancode == SDL_SCANCODE_P) {
+            commands->pause_toggle = true;
         }
         break;
     }

@@ -84,9 +84,11 @@ add_library(tetris_core STATIC
 target_include_directories(tetris_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 tetris_enable_warnings(tetris_core)
 
-# Layout maths only: no GL, no SDL, so the tests can link it on its own.
+# Layout maths and the built-in font only: no GL, no SDL, so the tests can link
+# them on their own.
 add_library(tetris_view_layout STATIC
     src/render/board_layout.c
+    src/render/font.c
 )
 target_include_directories(tetris_view_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(tetris_view_layout PUBLIC tetris_core)
@@ -108,8 +110,10 @@ add_executable(tetris
     src/app/screenshot.c
     src/platform/platform.c
     src/render/board_view.c
+    src/render/hud.c
     src/render/renderer.c
     src/render/shader.c
+    src/render/text.c
 )
 target_link_libraries(tetris PRIVATE tetris_core tetris_input tetris_view_layout glad SDL3::SDL3)
 tetris_enable_warnings(tetris)
@@ -128,10 +132,12 @@ add_custom_command(TARGET tetris POST_BUILD
 enable_testing()
 
 add_executable(tetris_tests
+    tests/test_font.c
     tests/test_input_buffer.c
     tests/test_main.c
     tests/test_game.c
     tests/test_piece.c
+    tests/test_rules.c
 )
 target_link_libraries(tetris_tests PRIVATE tetris_core tetris_input tetris_view_layout)
 tetris_enable_warnings(tetris_tests)
