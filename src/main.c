@@ -1,11 +1,14 @@
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <SDL3/SDL.h>
 
+#include "app/input_buffer.h"
+#include "app/input_sdl.h"
 #include "app/screenshot.h"
 #include "core/game.h"
 #include "core/rng.h"
@@ -144,6 +147,31 @@ static bool app_shader_dir(char *buffer, size_t buffer_size)
     return true;
 }
 
+/*
+ * The window title is the only text this milestone has: without a font renderer
+ * it still tells the player the line count and that the game is over. The title
+ * is rebuilt only when lines_cleared or topped_out actually change, so it does
+ * not churn the window manager every frame.
+ */
+static void app_update_title(Platform *platform, const GameState *game, uint32_t *shown_lines,
+                             bool *shown_topped_out)
+{
+    if (*shown_lines == game->lines_cleared && *shown_topped_out == game->topped_out) {
+        return;
+    }
+    *shown_lines = game->lines_cleared;
+    *shown_topped_out = game->topped_out;
+
+    char title[64];
+    if (game->topped_out) {
+        snprintf(title, sizeof title, "%s — game over (R to restart)", APP_TITLE);
+    } else {
+        snprintf(title, sizeof title, "%s — lines %u", APP_TITLE,
+                 (unsigned)game->lines_cleared);
+    }
+    platform_set_title(platform, title);
+}
+
 int main(int argc, char **argv)
 {
     AppOptions options;
@@ -177,6 +205,20 @@ int main(int argc, char **argv)
     GameState game;
     game_init(&game, options.seed);
 
+    InputBuffer input;
+    input_buffer_reset(&input);
+
+    /*
+     * A restart re-seeds the game from the base seed plus the restart count, so
+     * restarts are reproducible but do not replay the same piece order.
+     */
+    const uint64_t base_seed = options.seed;
+    uint32_t restart_count = 0;
+
+    /* Sentinel so the first frame writes the title once. */
+    uint32_t shown_title_lines = UINT32_MAX;
+    bool shown_title_topped_out = false;
+
     int exit_code = 0;
     long frames_rendered = 0;
     double accumulator = 0.0;
@@ -184,8 +226,20 @@ int main(int argc, char **argv)
     bool quit = false;
 
     while (!quit) {
-        if (platform_poll_events(&platform)) {
+        /* Events arrive at frame rate; presses are buffered until a game tick. */
+        AppInputCommands commands = { false, false };
+        SDL_Event event;
+        while (platform_next_event(&platform, &event)) {
+            app_input_handle_event(&input, &event, &commands);
+        }
+        if (commands.quit) {
             quit = true;
+        }
+        if (commands.restart) {
+            ++restart_count;
+            game_init(&game, base_seed + restart_count);
+            input_buffer_reset(&input);
+            accumulator = 0.0;
         }
 
         const double now = platform_time_seconds();
@@ -199,7 +253,8 @@ int main(int argc, char **argv)
 
         accumulator += frame_time;
         while (accumulator >= SIM_DT) {
-            game_step(&game);
+            const GameInput tick_input = input_buffer_take(&input);
+            game_step(&game, &tick_input);
             accumulator -= SIM_DT;
         }
         const float alpha = (float)(accumulator / SIM_DT);
@@ -210,8 +265,10 @@ int main(int argc, char **argv)
 
         const BoardLayout layout = board_layout_compute(fb_width, fb_height);
         renderer_begin(&renderer, fb_width, fb_height);
-        board_view_draw(&renderer, &layout, &game.board, alpha);
+        board_view_draw(&renderer, &layout, &game, alpha);
         renderer_end(&renderer);
+
+        app_update_title(&platform, &game, &shown_title_lines, &shown_title_topped_out);
 
         ++frames_rendered;
         const bool last_frame = quit || (options.frames > 0 && frames_rendered >= options.frames);

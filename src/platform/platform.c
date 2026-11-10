@@ -84,27 +84,17 @@ bool platform_init(Platform *platform, const char *title, int width, int height)
     return true;
 }
 
-bool platform_poll_events(Platform *platform)
+bool platform_next_event(Platform *platform, SDL_Event *out_event)
 {
     (void)platform;
-    bool quit = false;
-    SDL_Event event;
+    return SDL_PollEvent(out_event);
+}
 
-    while (SDL_PollEvent(&event)) {
-        switch (event.type) {
-        case SDL_EVENT_QUIT:
-            quit = true;
-            break;
-        case SDL_EVENT_KEY_DOWN:
-            if (event.key.key == SDLK_ESCAPE) {
-                quit = true;
-            }
-            break;
-        default:
-            break;
-        }
+void platform_set_title(Platform *platform, const char *title)
+{
+    if (!SDL_SetWindowTitle(platform->window, title)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "SDL_SetWindowTitle: %s", SDL_GetError());
     }
-    return quit;
 }
 
 void platform_drawable_size(Platform *platform, int *out_width, int *out_height)

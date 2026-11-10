@@ -17,8 +17,15 @@ typedef struct Platform {
  */
 bool platform_init(Platform *platform, const char *title, int width, int height);
 
-/* Drains the event queue. Returns true when the app should quit. */
-bool platform_poll_events(Platform *platform);
+/*
+ * Pops one event from the queue into out_event and returns true. Returns false
+ * once the queue is empty, which leaves the meaning of the events to the app:
+ * this layer deliberately knows nothing about game actions or restart keys.
+ */
+bool platform_next_event(Platform *platform, SDL_Event *out_event);
+
+/* Sets the window title. Logs a warning if SDL refuses it. */
+void platform_set_title(Platform *platform, const char *title);
 
 /* Framebuffer size in pixels, which may exceed the window size on HiDPI. */
 void platform_drawable_size(Platform *platform, int *out_width, int *out_height);

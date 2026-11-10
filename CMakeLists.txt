@@ -75,8 +75,10 @@ message(STATUS "SDL3: ${SDL3_DIR}")
 # --- pure game logic --------------------------------------------------------
 
 add_library(tetris_core STATIC
+    src/core/bag.c
     src/core/board.c
     src/core/game.c
+    src/core/piece.c
     src/core/rng.c
 )
 target_include_directories(tetris_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -90,17 +92,26 @@ target_include_directories(tetris_view_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(tetris_view_layout PUBLIC tetris_core)
 tetris_enable_warnings(tetris_view_layout)
 
+# Input buffering only: no SDL either, so the tests can drive a full tick loop.
+add_library(tetris_input STATIC
+    src/app/input_buffer.c
+)
+target_include_directories(tetris_input PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(tetris_input PUBLIC tetris_core)
+tetris_enable_warnings(tetris_input)
+
 # --- application ------------------------------------------------------------
 
 add_executable(tetris
     src/main.c
+    src/app/input_sdl.c
     src/app/screenshot.c
     src/platform/platform.c
     src/render/board_view.c
     src/render/renderer.c
     src/render/shader.c
 )
-target_link_libraries(tetris PRIVATE tetris_core tetris_view_layout glad SDL3::SDL3)
+target_link_libraries(tetris PRIVATE tetris_core tetris_input tetris_view_layout glad SDL3::SDL3)
 tetris_enable_warnings(tetris)
 
 # Assets are looked up relative to the executable, so they have to sit next to
@@ -116,8 +127,13 @@ add_custom_command(TARGET tetris POST_BUILD
 
 enable_testing()
 
-add_executable(tetris_tests tests/test_main.c)
-target_link_libraries(tetris_tests PRIVATE tetris_core tetris_view_layout)
+add_executable(tetris_tests
+    tests/test_input_buffer.c
+    tests/test_main.c
+    tests/test_game.c
+    tests/test_piece.c
+)
+target_link_libraries(tetris_tests PRIVATE tetris_core tetris_input tetris_view_layout)
 tetris_enable_warnings(tetris_tests)
 
 add_test(NAME tetris_tests COMMAND tetris_tests)

@@ -109,6 +109,7 @@ void renderer_begin(Renderer *renderer, int fb_w, int fb_h)
     glViewport(0, 0, fb_w, fb_h);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glClearColor(RENDERER_BACKGROUND_R, RENDERER_BACKGROUND_G, RENDERER_BACKGROUND_B,
@@ -138,6 +139,19 @@ void renderer_push_rect(Renderer *renderer, float x, float y, float w, float h, 
     instance[6] = color.b;
     instance[7] = color.a;
     ++renderer->count;
+}
+
+void renderer_set_clip(Renderer *renderer, int x, int y, int w, int h)
+{
+    renderer_flush(renderer);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x, y, w > 0 ? w : 0, h > 0 ? h : 0);
+}
+
+void renderer_clear_clip(Renderer *renderer)
+{
+    renderer_flush(renderer);
+    glDisable(GL_SCISSOR_TEST);
 }
 
 void renderer_end(Renderer *renderer)

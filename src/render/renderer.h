@@ -41,6 +41,16 @@ void renderer_begin(Renderer *renderer, int fb_w, int fb_h);
 /* Queues one axis-aligned rectangle. Flushes early if the batch is full. */
 void renderer_push_rect(Renderer *renderer, float x, float y, float w, float h, Color color);
 
+/*
+ * Restricts everything drawn from now on to the given pixel rectangle, in the
+ * same bottom-left-origin coordinates as the rectangles. Clipping is GL state,
+ * so the pending batch is flushed before it changes.
+ */
+void renderer_set_clip(Renderer *renderer, int x, int y, int w, int h);
+
+/* Lifts the clipping rectangle, flushing the pending batch first. */
+void renderer_clear_clip(Renderer *renderer);
+
 /* Flushes whatever is still queued. */
 void renderer_end(Renderer *renderer);
 
