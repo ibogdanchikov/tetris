@@ -5,21 +5,22 @@
 The game is split into a deterministic simulation and a presentation layer that reads it. `src/core` is the whole simulation: no SDL, no OpenGL, no floating point, no dynamic allocation, no clock and no mutable global state. Everything above it either turns events into input for the core or reads the core's state to draw pixels and make sound. A module may include only modules below it in the diagram; nothing below includes anything above.
 
 ```
-                        tetris (executable)
-   main.c, platform.c, audio.c, input_sdl.c, screenshot.c, render/*
-                                  |
-          +---------------+-------+--------+----------------+
-          |               |                |                |
-          v               v                v                v
-     tetris_fx    tetris_view_layout   tetris_input    tetris_audio
-     src/fx       board_layout, font   input_buffer    sound_map, mix, synth
-          +---------------+-------+--------+----------------+
-                                  v
-                             tetris_core
-                  board, piece, bag, rng, input, game
+                             tetris (executable)
+   main.c, platform.c, audio.c, input_sdl.c, save_file.c, screenshot.c, render/*
+                                       |
+     +---------------+-----------------+----------------+---------------+
+     |               |                 |                |               |
+     v               v                 v                v               v
+ tetris_fx   tetris_view_layout   tetris_input     tetris_audio     tetris_app
+ src/fx      board_layout, font   input_buffer     sound_map,       save, menu
+                                                   mix, synth
+     +---------------+-----------------+----------------+---------------+
+                                       v
+                                  tetris_core
+                       board, piece, bag, rng, input, game
 ```
 
-`glad` (the vendored loader) and `SDL3::SDL3` are linked only by the executable. `src/platform/platform.c` is the only code that creates an SDL window or an OpenGL context. `src/audio/audio.c` is the only code that touches SDL audio. `src/app/input_sdl.c` and `src/app/screenshot.c` are app-layer SDL code, and `main.c` calls a few SDL functions directly (`SDL_GetBasePath`, `SDL_fmod`, `SDL_Log`).
+`glad` (the vendored loader) and `SDL3::SDL3` are linked only by the executable. `src/platform/platform.c` is the only code that creates an SDL window or an OpenGL context. `src/audio/audio.c` is the only code that touches SDL audio. `src/app/input_sdl.c`, `src/app/save_file.c` and `src/app/screenshot.c` are app-layer SDL code, `src/render/menu_view.c` uses SDL's `SDL_sinf` and `SDL_fmodf`, and `main.c` calls a few SDL functions directly (`SDL_GetBasePath`, `SDL_fmod`, `SDL_Log`).
 
 ## Key decisions
 
@@ -31,7 +32,13 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Events are per tick, not per frame.** `GameState.events` is a `GAME_EVENT_*` bitmask cleared at the start of every `game_step`. A frame that runs several ticks ORs them together. `main.c` calls `fx_on_events` and `sound_map_events` once per frame with the combined bits.
 
-**Presentation reads state and never writes it.** The views take `const GameState *`. The effects layer has its own `Fx` state and its own splitmix64 generator, so particles cannot change the piece order. Pause is app state in `main.c`, not part of `GameState`.
+**Presentation reads state and never writes it.** The views take `const GameState *`. The effects layer has its own `Fx` state and its own splitmix64 generator, so particles cannot change the piece order. Pause is app state, not part of `GameState`.
+
+**Screens are a small state machine outside the game.** `src/app/menu.c` holds the current `Screen` (title, main menu, playing, paused, game over, settings, controls, high scores), the selected row and the key-binding prompt. It takes `MenuKey` values and returns a `MenuCommand` (start a run, resume, restart, drop the run, quit, a setting changed) that `main.c` carries out. It has no SDL and no game rules: `GameState.game_over` stays the rule result, and `main.c` switches to `SCREEN_GAME_OVER` when it sees it. Only `SCREEN_PLAYING` runs ticks; every other screen drops the accumulator and the input buffer each frame, so nothing pressed in a menu reaches the game.
+
+**Settings live outside the core.** The core gets what a run needs through `GameConfig` (start level, DAS, ARR) and keeps DAS and ARR in `GameState`, so the rules never read a file and a state snapshot still replays. Volume goes to `audio_set_volume`, effects intensity to `fx_set_intensity`, and key bindings to `app_input_action`, which looks the scancode up in `Settings`.
+
+**The save file is versioned text.** `src/app/save.c` turns `SaveData` (settings, bindings, top ten scores) into a `TETRIS SAVE` line, `version=1` and one `key=value` per line, and parses it back defensively: no magic line or an unknown version gives the defaults, unknown keys and malformed lines are skipped, numbers are clamped. It works on strings only. `src/app/save_file.c` finds the file with `SDL_GetPrefPath("", "tetris")`, reads it with `SDL_LoadFile`, and writes `<path>.tmp` before renaming it over the old file, so a crash mid-save keeps the previous one. Settings are written when the player leaves the settings screens (or quits), a score as soon as the run ends.
 
 **There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` draws a neon glass block with rounded corners, a glowing tube along the edge, dark glass lit from inside, a thin inner line, a sheen that sweeps across the screen every few seconds and, with a seed in `p1`, random sparkles. `RECT_STYLE_NEON` draws a glowing tube along a rounded rectangle, or a glowing filled one, for the frames, the text glow and the lock flash. `RECT_STYLE_GLOW` draws a radial falloff for particles, the glow around blocks and the active piece's halo, `RECT_STYLE_GHOST` draws one cell of the ghost's hologram silhouette from a mask of its neighbors, and `RECT_STYLE_BEAM` draws the light that falls from the piece to the ghost. The animated parts of the block, ghost and beam styles run on the `u_time` uniform, so `board_view` passes no time of its own. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
 
@@ -63,22 +70,26 @@ The game is split into a deterministic simulation and a presentation layer that 
 | `tetris_view_layout` | `src/render/board_layout.c`, `src/render/font.c` | Layout math and the built-in 5x7 font. | `tetris_core` | SDL, GL, allocation |
 | `tetris_input` | `src/app/input_buffer.c` | Press/hold buffer between frames and ticks. | `tetris_core` (`src/core/input.h`) | SDL |
 | `tetris_audio` | `src/app/sound_map.c`, `src/audio/mix.c`, `src/audio/synth.c` | Event-to-sound mapping, voice mixing and synthesis. | `tetris_core` | SDL, allocation, libm |
-| `tetris` | `src/main.c`, `src/app/input_sdl.c`, `src/app/screenshot.c`, `src/audio/audio.c`, `src/platform/platform.c`, `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c`, `src/render/renderer.c`, `src/render/shader.c`, `src/render/text.c`, generated `builtin_shaders.c` | Window, GL context, SDL audio, input mapping, rendering and the frame loop. | Everything above, `glad`, `SDL3::SDL3` | Nothing forbidden; this is the top layer |
-| `tetris_tests` | `tests/test_main.c`, `tests/test_piece.c`, `tests/test_game.c`, `tests/test_rules.c`, `tests/test_input_buffer.c`, `tests/test_font.c`, `tests/test_fx.c`, `tests/test_audio.c` | One assert-style test executable. | `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout` | SDL, GL |
+| `tetris_app` | `src/app/save.c`, `src/app/menu.c` | Settings, key bindings, the score table, the save text format and the screen state machine. | `tetris_core`, C standard headers (`stdio.h` for `snprintf`) | SDL, GL, file I/O, allocation |
+| `tetris` | `src/main.c`, `src/app/input_sdl.c`, `src/app/save_file.c`, `src/app/screenshot.c`, `src/audio/audio.c`, `src/platform/platform.c`, `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c`, `src/render/menu_view.c`, `src/render/renderer.c`, `src/render/shader.c`, `src/render/text.c`, generated `builtin_shaders.c` | Window, GL context, SDL audio, input mapping, the save file, rendering and the frame loop. | Everything above, `glad`, `SDL3::SDL3` | Nothing forbidden; this is the top layer |
+| `tetris_tests` | `tests/test_main.c`, `tests/test_piece.c`, `tests/test_game.c`, `tests/test_rules.c`, `tests/test_input_buffer.c`, `tests/test_font.c`, `tests/test_fx.c`, `tests/test_audio.c`, `tests/test_save.c` | One assert-style test executable. | `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout`, `tetris_app` | SDL, GL |
 
-`src/render/text.c` is in the executable, not in `tetris_view_layout`, because it draws through `Renderer`. `src/render/board_view.c`, `src/render/fx_view.c` and `src/render/hud.c` are also executable code: they need GL, even though their layout inputs are pure.
+`src/render/text.c` is in the executable, not in `tetris_view_layout`, because it draws through `Renderer`. `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c` and `src/render/menu_view.c` are also executable code: they need GL, even though their layout inputs are pure.
 
 ## Main interfaces
 
 ### Simulation
 
 ```c
+GameConfig game_default_config(void);
+void game_init_with_config(GameState *game, uint64_t seed, const GameConfig *config);
 void game_init(GameState *game, uint64_t seed);
 void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level);
+void game_set_shift_timing(GameState *game, uint16_t das_ticks, uint16_t arr_ticks);
 void game_step(GameState *game, const GameInput *input);
 ```
 
-`game_init` seeds the generator, fills the bag and the next queue, and spawns the first piece at level 1. `game_init_at_level` does the same at a chosen start level (0 is treated as 1). `game_step` advances exactly one tick; during play it is the only per-tick entry point that changes the rules state.
+`game_init_with_config` seeds the generator, fills the bag and the next queue, and spawns the first piece at the config's start level (0 is treated as 1) with its DAS and ARR. `game_init` and `game_init_at_level` are wrappers with the default config (level 1, `GAME_DAS_TICKS`, `GAME_ARR_TICKS`). `game_set_shift_timing` changes DAS and ARR mid-run for a settings change from the pause menu. ARR 0 means a repeat moves the piece as far as it goes. `game_step` advances exactly one tick; during play it is the only per-tick entry point that changes the rules state.
 
 ```c
 typedef enum GameAction {
@@ -110,6 +121,7 @@ typedef struct GameInput {
 | `last_hard_drop_rows`, `last_hard_drop_from` | Set on the `GAME_EVENT_HARD_DROP` tick, before the drop. `rows` is the distance traveled and is 0 when the piece was already resting. |
 | `piece_serial` | Incremented on every spawn; renderers can use it to detect a new piece. |
 | `tick`, `events`, `game_over`, `game_over_reason` | `events` is cleared at the start of each tick and must be OR-ed across a multi-tick frame. |
+| `das_ticks`, `arr_ticks` | The run's shift timing, from `GameConfig`. |
 
 `game_step` order inside one tick: clear events; return early on game over; run the clear-delay phase if clearing; hold on a press; reset `gravity_accum` on a soft-drop press; rotation with kicks (CW and CCW in the same tick cancel); horizontal movement with DAS/ARR; hard drop (fall to the ghost row, score, lock, done); gravity or soft drop; note the lowest row, update `grounded`, run the lock counter and maybe lock; increment `tick`. The order is documented on `game_step` in `src/core/game.h`; the soft-drop accumulator reset is an extra step that happens between hold and rotation.
 
@@ -122,7 +134,30 @@ GameInput input_buffer_take(InputBuffer *buffer);
 void input_buffer_reset(InputBuffer *buffer);
 ```
 
-`input_buffer_key_down` marks the action held and queues the press. `input_buffer_key_up` clears the held bit but leaves an undelivered press queued. `input_buffer_take` returns one tick of input and clears the queued presses. `input_buffer_reset` drops everything, which is what pause, focus loss and restart do.
+`input_buffer_key_down` marks the action held and queues the press. `input_buffer_key_up` clears the held bit but leaves an undelivered press queued. `input_buffer_take` returns one tick of input and clears the queued presses. `input_buffer_reset` drops everything, which is what pause, focus loss, restart and every menu screen do.
+
+### Settings, save file and screens
+
+```c
+void settings_defaults(Settings *settings);
+uint32_t settings_actions_for_key(const Settings *settings, int scancode);
+bool settings_bind_key(Settings *settings, BindAction action, int slot, int scancode);
+bool save_parse(const char *text, size_t length, SaveData *out);
+size_t save_serialize(const SaveData *save, char *buffer, size_t capacity);
+int save_insert_score(SaveData *save, const HighScore *entry);
+
+bool save_file_path(char *buffer, size_t size);
+void save_file_load(const char *path, SaveData *out);
+bool save_file_write(const char *path, const SaveData *save);
+
+void menu_init(Menu *menu);
+MenuCommand menu_handle_key(Menu *menu, Settings *settings, MenuKey key);
+MenuCommand menu_bind_key(Menu *menu, Settings *settings, int scancode);
+```
+
+`Settings` holds the volume and effects (0 to 10), DAS (1 to 30 ticks), ARR (0 to 10 ticks), the start level (1 to 15) and two key slots per `BindAction`. Keys are SDL scancodes stored as numbers; `save.h` names the ones it needs as USB HID usage IDs, and `input_sdl.c` checks each against `SDL_Scancode` with `_Static_assert`. Escape, P, M, R and F5 are reserved for the app and cannot be bound, and binding a key takes it out of every other slot. `save_parse` always leaves a valid `SaveData` and returns false only when the text is not a save file of a known version. `save_insert_score` keeps the table sorted, puts a tie below the earlier run, ignores a run that scored nothing, and returns the new place or -1.
+
+`menu_handle_key` applies one menu key: up and down move the selection, left and right change a value row or the key slot, select acts on the row, back returns to the screen that opened the current one. `menu_bind_key` takes the key the controls screen is waiting for; Escape cancels it. `main.c` feeds both one SDL event at a time, so the Enter that opens the prompt is not taken as the key to bind.
 
 ### Layout
 
@@ -157,10 +192,12 @@ void renderer_shutdown(Renderer *renderer);
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
                      float alpha, float frame_pulse);
 void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx);
-void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game, bool paused);
+void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game);
+void menu_view_draw(Renderer *renderer, const BoardLayout *layout, const MenuViewState *state);
+bool menu_view_hides_game(const Menu *menu);
 ```
 
-Draw order is board, effects, HUD. `board_view_draw` draws the neon frame, the grid, the glow of the locked cells and the cells themselves, then either the clear animation while the phase is clearing or, with additive blending, the drop beam, the ghost and the halo, followed by the active piece with alpha blending. `fx_view_draw` draws the lock flash, trails and particles; it switches to additive blending for the trails and particles and restores alpha before returning. `hud_draw` draws the hold and next panels with the same neon frame (`board_view_draw_neon_frame`), the stats and the paused or game-over overlay; `text_draw` adds the glow behind the letters in an additive pass of its own.
+Draw order is board, effects, HUD, menu. The title, main menu, high scores, settings and controls cover the whole group with a neon panel, and `menu_view_hides_game` tells `main.c` to skip the board, effects and HUD under them. The pause and game-over menus dim the playfield and leave the HUD visible. Key names on the controls screen come from `app_input_key_name` through a callback in `MenuViewState`, so the view needs no input code. `board_view_draw` draws the neon frame, the grid, the glow of the locked cells and the cells themselves, then either the clear animation while the phase is clearing or, with additive blending, the drop beam, the ghost and the halo, followed by the active piece with alpha blending. `fx_view_draw` draws the lock flash, trails and particles; it switches to additive blending for the trails and particles and restores alpha before returning. `hud_draw` draws the hold and next panels with the same neon frame (`board_view_draw_neon_frame`) and the stats; `text_draw` adds the glow behind the letters in an additive pass of its own.
 
 ### Effects
 
@@ -169,11 +206,12 @@ void fx_init(Fx *fx, uint64_t seed);
 void fx_reset(Fx *fx);
 void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game);
 void fx_update(Fx *fx, float dt);
+void fx_set_intensity(Fx *fx, float intensity);
 void fx_shake_offset(const Fx *fx, float *out_x, float *out_y);
 void fx_clear_visual(float progress, FxClearVisual *out);
 ```
 
-`fx_on_events` consumes the frame's OR-ed event bits and the game snapshots. `fx_update` advances timers and particles by `dt`, clamped to `FX_MAX_DT` (0.1 s). `fx_shake_offset` returns the current shake in board cells. `fx_clear_visual` maps normalized clear progress to the flash amount and per-column visibility used by `board_view`.
+`fx_on_events` consumes the frame's OR-ed event bits and the game snapshots. `fx_set_intensity` (0 to 1, kept by `fx_reset`) scales the particle counts per cell, the shake, the lock flash, the trails and the level-up pulse; at 1 everything is exactly as tuned, at 0 none of it happens. The line-clear animation is not scaled. `fx_update` advances timers and particles by `dt`, clamped to `FX_MAX_DT` (0.1 s). `fx_shake_offset` returns the current shake in board cells. `fx_clear_visual` maps normalized clear progress to the flash amount and per-column visibility used by `board_view`.
 
 ### Audio
 
@@ -183,13 +221,14 @@ void audio_play(Audio *audio, SoundId id, float gain);
 void audio_stop_all(Audio *audio);
 void audio_set_muted(Audio *audio, bool muted);
 bool audio_muted(const Audio *audio);
+void audio_set_volume(Audio *audio, float volume);
 void audio_shutdown(Audio *audio);
 
 int sound_map_events(uint32_t events, const GameState *game, SoundRequest out[], int max);
 int synth_render(SoundId id, int sample_rate, float *out, int capacity);
 ```
 
-`audio_init` is the only place that opens the SDL audio device. It returns false after logging a warning, and later calls that would produce sound become no-ops. `sound_map_events` turns event bits into at most `SOUND_MAP_MAX_REQUESTS` (8) requests and owns the precedence rules (a clear replaces the lock click, a hard drop replaces it too, game over suppresses the lock and clear sounds). `synth_render` is deterministic and SDL-free.
+`audio_init` is the only place that opens the SDL audio device. `audio_set_volume` multiplies `AUDIO_MASTER_GAIN` by 0 to 1 and fades like mute; `main.c` squares the 0 to 10 setting so the low end is not one loudness. It returns false after logging a warning, and later calls that would produce sound become no-ops. `sound_map_events` turns event bits into at most `SOUND_MAP_MAX_REQUESTS` (8) requests and owns the precedence rules (a clear replaces the lock click, a hard drop replaces it too, game over suppresses the lock and clear sounds). `synth_render` is deterministic and SDL-free.
 
 ### Platform
 
@@ -206,17 +245,19 @@ double platform_time_seconds(void);
 
 ## Frame and tick flow
 
+Startup loads the save file (or the defaults), starts a board so every screen has a game to read, applies the settings to audio, effects and the game, and shows the title, or starts a run at once with `--play`.
+
 One iteration of the loop in `main.c`:
 
-1. Drain SDL events with `platform_next_event` and pass each one to `app_input_handle_event`. Game keys go into `InputBuffer`; Escape, R, P, M and F5 set fields on `AppInputCommands`; a focus loss clears the buffer and sets `focus_lost`.
-2. Apply the commands. Quit ends the loop. F5 calls `renderer_reload_shaders`. R re-seeds the game from `base_seed + restart_count`, resets `Fx`, stops audio, resets input and clears the accumulator. M toggles mute. A focus loss pauses; P toggles pause. Both clear the input buffer and the accumulator, and the pause blip plays at `APP_PAUSE_SOUND_GAIN`.
-3. Read `platform_time_seconds`, compute `frame_time`, and clamp it to `MAX_FRAME_SECONDS`. A negative frame time becomes 0.
-4. If paused, reset the input buffer and the accumulator so no key pressed during the pause fires on resume. Otherwise add `frame_time` to the accumulator and, while it holds a full `SIM_DT`, call `input_buffer_take`, then `game_step`, and OR `game.events` into `frame_events`.
-5. If not paused, call `fx_on_events(&fx, frame_events, &game)` and `fx_update(&fx, frame_time)`. Call `sound_map_events`, drop move sounds that arrive less than `APP_MOVE_SOUND_TICKS` (6) ticks after the last one, and hand the rest to `audio_play`.
-6. Compute `alpha`, read the drawable size, compute the layout, and translate it by the shake offset times the cell size. The shake is skipped while paused.
-7. `renderer_begin` with `SDL_fmod(now, 3600.0)`, `renderer_draw_background`, `board_view_draw`, `fx_view_draw`, `hud_draw`, `renderer_end`.
+1. Drain SDL events with `platform_next_event` and handle each one in `app_handle_event`. `app_input_handle_event` turns it into `AppInputCommands` for the current screen. While playing, game keys go into `InputBuffer` through the bindings, and Escape or P pause. On other screens the arrows, Return, Escape, Backspace and Delete become `MenuKey` values, which go to `menu_handle_key` (or the key goes to `menu_bind_key` while the controls screen waits for one). R restarts while playing, paused or after game over, M toggles mute, F5 reloads the shaders, and a focus loss pauses a running game. The returned `MenuCommand` starts a run (`base_seed + run count`, the saved start level, DAS and ARR), resumes, drops the run, applies a setting or quits.
+2. Read `platform_time_seconds`, compute `frame_time`, and clamp it to `MAX_FRAME_SECONDS`. A negative frame time becomes 0.
+3. On `SCREEN_PLAYING`, add `frame_time` to the accumulator and, while it holds a full `SIM_DT`, call `input_buffer_take`, then `game_step`, and OR `game.events` into `frame_events`. Then `fx_on_events`, `fx_update`, and the sounds from `sound_map_events`, dropping move sounds that arrive less than `APP_MOVE_SOUND_TICKS` (6) ticks after the last one. If the game is now over, insert the run into the score table, save if it placed, and switch to `SCREEN_GAME_OVER`.
+4. On any other screen, reset the input buffer and the accumulator so no key pressed now fires later. The game-over screen keeps calling `fx_update`, so the last burst finishes; pause freezes the effects with the game.
+5. If settings changed and the player has left the settings, controls and main menu screens, write the save file.
+6. Compute `alpha` (0 outside play), read the drawable size, compute the layout, and translate it by the shake offset times the cell size while playing or on the game-over screen.
+7. `renderer_begin` with `SDL_fmod(now, 3600.0)`, `renderer_draw_background`, then `board_view_draw`, `fx_view_draw` and `hud_draw` unless `menu_view_hides_game`, then `menu_view_draw`, `renderer_end`.
 8. On the last frame, call `screenshot_save_bmp` before `platform_swap`, because the back buffer is undefined after the swap. Then swap.
-9. After the loop, shut down audio, renderer and platform.
+9. After the loop, write the save file if a setting is still unsaved, then shut down audio, renderer and platform.
 
 ## Conventions
 
@@ -225,11 +266,11 @@ One iteration of the loop in `main.c`:
 - File-local helpers are `static`. Headers expose only what another module needs.
 - Pointers are `const` when the callee does not write through them. Views take `const GameState *`; the core takes `GameState *`.
 - Functions that can fail return `bool` or a count. They log the reason (`SDL_Log` in SDL code, `fprintf(stderr, ...)` elsewhere), undo what they allocated and return a value the caller can check. `main` turns a failed init into a non-zero exit code.
-- Allocation belongs to the executable. The core, `fx`, the layout library, the input buffer, the synth, the mixer and the sound map never allocate. `Renderer` allocates its instance array in `renderer_init` and frees it in `renderer_shutdown`; `audio.c` allocates the pre-rendered sound buffers and the scratch buffer and frees them in `audio_shutdown`; `screenshot.c` allocates the pixel buffer for one frame and frees it.
+- Allocation belongs to the executable. The core, `fx`, the layout library, the input buffer, the synth, the mixer, the sound map, the save format and the menus never allocate. `save_file.c` frees the buffer `SDL_LoadFile` returns. `Renderer` allocates its instance array in `renderer_init` and frees it in `renderer_shutdown`; `audio.c` allocates the pre-rendered sound buffers and the scratch buffer and frees them in `audio_shutdown`; `screenshot.c` allocates the pixel buffer for one frame and frees it.
 - Warnings are on for project code and off for generated GLAD code. GCC/Clang get `-Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition`; MSVC gets `/W4`. `TETRIS_WARNINGS_AS_ERRORS=ON` adds `-Werror` or `/WX`.
 - `TETRIS_ENABLE_SANITIZERS=ON` adds `-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all` and the matching link options. It is ignored on MSVC with a warning.
-- Tests are one executable with a small assert-style harness. `CHECK` and `CHECK_EQ_INT` print the file and line and increment `test_failures`; `main` returns that count. Tests link `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio` and `tetris_view_layout`, never SDL or GL.
-- Tuning constants live next to the code that owns them: rules in `src/core/game.h`, effect lifetimes and shake in `src/fx/fx.h`, layout in `src/render/board_layout.h`, renderer capacity and styles in `src/render/renderer.h`, audio format and master gain in `src/audio/audio.h`, synthesis limits in `src/audio/synth.h`, and app timing in `src/main.c`. Private visual constants such as the trail alpha live at the top of `src/render/fx_view.c`.
+- Tests are one executable with a small assert-style harness. `CHECK` and `CHECK_EQ_INT` print the file and line and increment `test_failures`; `main` returns that count. Tests link `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout` and `tetris_app`, never SDL or GL.
+- Tuning constants live next to the code that owns them: rules in `src/core/game.h`, effect lifetimes and shake in `src/fx/fx.h`, layout in `src/render/board_layout.h`, renderer capacity and styles in `src/render/renderer.h`, audio format and master gain in `src/audio/audio.h`, synthesis limits in `src/audio/synth.h`, setting ranges and the save format version in `src/app/save.h`, and app timing and menu sound gains in `src/main.c`. Private visual constants such as the trail alpha live at the top of `src/render/fx_view.c`.
 
 ### Adding a sound
 
@@ -252,6 +293,14 @@ One iteration of the loop in `main.c`:
 2. Add the matching branch and constants to `assets/shaders/quad.frag`. The style id in the shader and the enum must stay in step.
 3. Pass the style parameters through `renderer_push_styled` and document what `p0`, `p1` and `p2` mean.
 4. Check the style at more than one window size; the shader works in pixels, not cells.
+
+### Adding a setting
+
+1. Add the field and its range to `Settings` in `src/app/save.h`, its default to `settings_defaults` and its clamp to `settings_clamp`.
+2. Read and write it in `save_apply_line` and `save_serialize`. A new key needs no version bump, because older builds skip unknown keys; a changed meaning does.
+3. Add a `MenuItem`, put it in the screen's item list in `src/app/menu.c`, and give it a label, a value and a range in `menu_item_label`, `menu_item_value` and `menu_item_setting`.
+4. Apply it in `app_apply_settings` in `src/main.c`.
+5. Extend the round trip and the clamping checks in `tests/test_save.c`.
 
 ### Adding a game rule
 

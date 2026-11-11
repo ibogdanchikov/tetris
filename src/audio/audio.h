@@ -35,6 +35,7 @@ typedef struct Audio {
     bool ready;        /* device open, buffers allocated, callback may run */
     bool subsystem;    /* SDL_INIT_AUDIO was initialised and must be quit */
     bool muted;
+    float volume; /* 0..1, multiplies AUDIO_MASTER_GAIN; written under the stream lock */
 
     /* Pre-rendered effects, indexed by SoundId; NULL when the sound is missing. */
     float *sounds[SOUND_COUNT];
@@ -78,6 +79,13 @@ void audio_stop_all(Audio *audio);
 void audio_set_muted(Audio *audio, bool muted);
 
 bool audio_muted(const Audio *audio);
+
+/*
+ * Sets the volume, clamped to 0..1, as a factor on AUDIO_MASTER_GAIN. The
+ * change is faded in by the callback like mute. At 0 no new sound starts.
+ * audio_init resets it to 1, so call this after audio_init.
+ */
+void audio_set_volume(Audio *audio, float volume);
 
 /* Destroys the stream, frees the buffers and quits the audio subsystem. */
 void audio_shutdown(Audio *audio);

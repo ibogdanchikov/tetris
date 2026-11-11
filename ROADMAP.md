@@ -39,6 +39,16 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Procedural audio: note-list synthesis, a fixed voice mixer, SDL device output, mute and `--mute`.
 - Effect and audio tests.
 
+### Milestone 5: "Add a title screen, menus, settings and a save file"
+
+- An app-level screen state machine in `src/app/menu.c`: title, main menu, playing, paused, game over, settings, controls and high scores. `GameState.game_over` stays the rule result; the app mirrors it into the game-over screen.
+- A main menu with a start-level picker (1 to 15) wired to `game_init_with_config`.
+- Settings for volume, effects intensity, DAS, ARR and two key slots per action, applied at once, also to a paused run.
+- `GameConfig` and `game_set_shift_timing` in the core, so DAS and ARR are per run; ARR 0 moves the piece straight to the wall.
+- A versioned `key=value` save file with the settings and the top ten scores in `SDL_GetPrefPath`, parsed defensively and replaced through a temporary file and a rename.
+- `--play` starts a run without the title, so smoke tests and screenshots of the board keep working.
+- Save file parser, serializer, binding and score table tests in `tests/test_save.c`.
+
 ## Current status
 
 ### What works
@@ -46,20 +56,22 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - The full game loop: spawn, gravity, soft and hard drop, SRS rotation with kicks, hold, next queue, lock delay, line clears, scoring and levels.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
+- A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
 - A neon arcade look: glass blocks lit from inside with a sweeping sheen and random sparkles, a hologram ghost with a beam of light down to it, a glow around the active piece, neon tube frames and glowing text. Also the clear animation, particles, trails, shake, background shader and F5 reload.
 - Synthesized sound for moves, rotation, hold, hard drop, lock, line clears, level up, game over and pause. `M` mutes; `--mute` starts muted.
-- Command-line flags: `--frames`, `--screenshot`, `--assets`, `--size`, `--seed`, `--mute`, `--help`.
+- Command-line flags: `--frames`, `--screenshot`, `--assets`, `--size`, `--seed`, `--mute`, `--play`, `--help`.
 
 ### Verified on this machine
 
 - `ctest --preset debug`, `ctest --preset release` and `ctest --preset debug-sanitizers` all pass. Each runs the single `tetris_tests` executable.
 - `./build/debug/tetris --frames 2 --screenshot /tmp/opencode/tetris-check.bmp` opened a window and wrote an 800x600 BMP. The log reported an OpenGL 4.6 core context on Mesa Intel Iris Xe and a real audio device opened through PipeWire (`Built-in Audio Analog Stereo`, 48 kHz mono float stream to a 2-channel device).
 - The screenshot showed the playfield, the HOLD and NEXT panels, the score/level/lines readout and the shader-drawn background.
-- The tests cover the pure core, layout and font math, the input buffer, the effects layer and the audio synth/mixer/event mapping. They do not link SDL or OpenGL.
+- The tests cover the pure core, layout and font math, the input buffer, the effects layer, the audio synth/mixer/event mapping and the save file format. They do not link SDL or OpenGL.
+- Milestone 5 was checked with screenshots of every screen at 800x600: title, main menu, settings, controls (including the key prompt), high scores, pause and game over. The menus were driven by key events pushed with `SDL_PushEvent` from a throwaway copy of `main.c`, with `XDG_DATA_HOME` pointed at a scratch directory. Those runs changed the volume and DAS, rebound a key, played runs to game over, and then checked that `save.txt` held the changes and that the next start showed the best score. A save file of random bytes logged one warning and started with the defaults. `packaging/linux/build.sh` still builds and tests the release binary.
 
 ### Not verified on this machine
 
-- Interactive keyboard play by automation. The input path is covered by unit tests, but no test drives a real window with synthetic key events.
+- Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here.
 - Windows and macOS builds.
 - Live window resize by dragging. The layout is recomputed from the drawable size every frame, but that path has only been exercised through the screenshot size and unit tests.
@@ -67,52 +79,24 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ### Known limitations
 
-- No title screen, menu, settings screen or screen state machine. The game starts playing immediately; pause is a `bool` in `main.c`.
-- No persistence. There is no settings file and no high-score table; nothing calls `SDL_GetPrefPath`.
 - No T-spin, mini T-spin, back-to-back, combo or perfect-clear scoring. `last_kick_index` and `last_action_was_rotation` are recorded but not used by the rules yet.
-- No text beyond the built-in 5x7 font. It covers space, A-Z, 0-9 and `: . - ! ?`; lowercase uses the uppercase glyph and other characters are skipped.
-- No music, volume control, key rebinding, DAS/ARR settings or start-level picker. DAS and ARR are compile-time constants in `src/core/game.h`.
+- No text beyond the built-in 5x7 font. It covers space, A-Z, 0-9 and `: . - ! ? < >`; lowercase uses the uppercase glyph and other characters are skipped, so a key name such as `[` shows as a gap on the controls screen.
+- No music. Mute (`M`) is not saved; only the volume is.
+- No player names in the score table, and no way to clear it short of deleting `save.txt`.
 - No gamepad, replay or CI. Only Linux is packaged, as a single x86_64 binary built by `packaging/linux/build.sh` and released by `.github/workflows/release.yml`.
 
 ### Rough edges
 
-- Visual tuning is compile-time. The trail and particle alphas are private constants in `src/render/fx_view.c` (`FX_VIEW_TRAIL_ALPHA`, `FX_VIEW_TRAIL_WIDE_ALPHA`, `FX_VIEW_PARTICLE_ALPHA`), and the shake amounts are in `src/fx/fx.h`. There is no effects-intensity setting.
+- Visual tuning is compile-time apart from the effects-intensity setting, which scales everything at once. The trail and particle alphas are private constants in `src/render/fx_view.c` (`FX_VIEW_TRAIL_ALPHA`, `FX_VIEW_TRAIL_WIDE_ALPHA`, `FX_VIEW_PARTICLE_ALPHA`), and the shake amounts are in `src/fx/fx.h`. Particle counts round per cell, so the lock dust (two per cell) is gone below effects 3.
 - `--seed` is parsed as a non-negative `long` with a maximum of 2147483647, while the core and `RNG_DEFAULT_SEED` use `uint64_t`. The default 64-bit seed cannot be passed back in full on the command line.
-- `--seed` does not choose a start level. `game_init_at_level` exists in the core, but no flag reaches it. The README sentence that calls `--seed` "the only start-level control" is imprecise.
+- `--play` starts at the saved start level; there is no flag for the level itself.
+- At 800x600 the controls screen draws its rows at two font pixels, because a key name like `LEFT SHIFT` has to fit a 30% column. It is readable but small.
 - `platform_set_title` is declared and implemented but no longer called; the window title is set once in `platform_init`.
 - The loop has no frame limiter of its own. It relies on vsync through `SDL_GL_SetSwapInterval(1)` and only logs a warning when the driver refuses it, so an uncapped driver would spin the loop.
 - The move-sound throttle lives in `main.c` (`APP_MOVE_SOUND_TICKS`) rather than in `sound_map`, so the mapping is not fully described by the SDL-free module.
 - A screenshot is uncompressed BMP. At 800x600 it is about 1.9 MB.
 
 ## Planned milestones
-
-### Milestone 5: game flow and persistence
-
-**Goal:** replace the single always-running session with explicit screens, configurable settings and a save file for settings and top-10 scores.
-
-**Scope**
-
-- App-level screen state machine: title, menu, playing, paused, game over. Keep `GameState.game_over` as the rule result and mirror it in the screen layer.
-- Settings screen and file: volume, key bindings, DAS/ARR, start level and effects intensity.
-- Save file for settings and the top ten scores in `SDL_GetPrefPath`, with a versioned format.
-- Start-level picker wired to `game_init_at_level`.
-- CLI flags continue to work for smoke tests and screenshots.
-
-**Design notes**
-
-- Keep the core pure. Add a small settings/config struct for DAS, ARR and start level, or pass those values explicitly; `game_init` stays the default wrapper so tests do not need a file. The core never reads a path.
-- The save code belongs in `src/app/` because `SDL_GetPrefPath` is SDL. A text format with a magic line, a version number and one `key=value` per line is easier to inspect and migrate than a binary struct. Parse defensively: clamp ranges, ignore unknown keys, and fall back to defaults on a missing or corrupt file.
-- Write to a temporary file and rename it, so a crash during save does not destroy the old settings.
-- High-score entries need at least score, level, lines and the seed. A date is optional; do not add one unless the screen shows it.
-- The screen layer can reuse the existing quad renderer and pixel font. It should not add game rules.
-
-**Done when**
-
-- Launch shows a title screen; the menu starts a game; pause and settings are reachable without restarting the process.
-- Settings survive a restart, and the game uses the saved DAS/ARR, volume, start level and effects intensity.
-- The top ten scores survive a restart, and a missing or corrupt save file falls back to defaults without crashing.
-- Parser and serializer have unit tests that do not link SDL.
-- `--frames` and `--screenshot` still work without a save file.
 
 ### Milestone 6: scoring extras
 

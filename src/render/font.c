@@ -144,6 +144,12 @@ static const FontEntry FONT_ENTRIES[] = {
     { '?', { FONT_ROW(0, 1, 1, 1, 0), FONT_ROW(1, 0, 0, 0, 1), FONT_ROW(0, 0, 0, 0, 1),
              FONT_ROW(0, 0, 0, 1, 0), FONT_ROW(0, 0, 1, 0, 0), FONT_ROW(0, 0, 0, 0, 0),
              FONT_ROW(0, 0, 1, 0, 0) } },
+    { '<', { FONT_ROW(0, 0, 0, 1, 0), FONT_ROW(0, 0, 1, 0, 0), FONT_ROW(0, 1, 0, 0, 0),
+             FONT_ROW(1, 0, 0, 0, 0), FONT_ROW(0, 1, 0, 0, 0), FONT_ROW(0, 0, 1, 0, 0),
+             FONT_ROW(0, 0, 0, 1, 0) } },
+    { '>', { FONT_ROW(0, 1, 0, 0, 0), FONT_ROW(0, 0, 1, 0, 0), FONT_ROW(0, 0, 0, 1, 0),
+             FONT_ROW(0, 0, 0, 0, 1), FONT_ROW(0, 0, 0, 1, 0), FONT_ROW(0, 0, 1, 0, 0),
+             FONT_ROW(0, 1, 0, 0, 0) } },
 };
 
 const uint8_t *font_glyph(char c)

@@ -7,7 +7,7 @@
 #include "render/font.h"
 #include "test_harness.h"
 
-static const char FONT_SUPPORTED[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.-!?";
+static const char FONT_SUPPORTED[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.-!?<>";
 
 static void test_font_every_supported_char_has_a_glyph(void)
 {

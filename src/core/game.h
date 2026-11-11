@@ -14,8 +14,12 @@
  * ticks to run. Every duration below is in ticks at 60 ticks per second.
  */
 
+/*
+ * Default shift timing. A run can use other values through GameConfig; these
+ * are what game_init and game_init_at_level use.
+ */
 #define GAME_DAS_TICKS 10        /* delayed auto shift before the first repeat */
-#define GAME_ARR_TICKS 2         /* auto repeat rate after DAS */
+#define GAME_ARR_TICKS 2         /* auto repeat rate after DAS; 0 = straight to the wall */
 #define GAME_LOCK_DELAY_TICKS 30 /* time a resting piece may still be moved */
 #define GAME_MAX_LOCK_RESETS 15  /* how often a move may reset the lock delay */
 
@@ -118,6 +122,8 @@ typedef struct GameState {
 
     int8_t shift_dir;       /* -1 left, 1 right, 0 none (DAS state) */
     uint16_t shift_counter; /* ticks until the next auto-repeat move */
+    uint16_t das_ticks;     /* this run's DAS, from GameConfig */
+    uint16_t arr_ticks;     /* this run's ARR, from GameConfig; 0 = straight to the wall */
 
     uint32_t lines_cleared;
     uint32_t score;
@@ -167,9 +173,31 @@ typedef struct GameState {
 } GameState;
 
 /*
- * Clears the whole struct to zero, seeds the generator, fills the bag and the
- * next queue and spawns the first piece at level 1. The board starts empty.
+ * What a run is started with. The core takes the values as they are; the app
+ * layer decides which ranges a player may pick.
+ *
+ * start_level  level of the first piece; 0 is treated as 1.
+ * das_ticks    ticks a held LEFT/RIGHT waits before it starts repeating.
+ * arr_ticks    ticks between two repeats; 0 moves the piece as far as it goes
+ *              on every repeat tick.
  */
+typedef struct GameConfig {
+    uint32_t start_level;
+    uint16_t das_ticks;
+    uint16_t arr_ticks;
+} GameConfig;
+
+/* Level 1 with GAME_DAS_TICKS and GAME_ARR_TICKS. */
+GameConfig game_default_config(void);
+
+/*
+ * Clears the whole struct to zero, seeds the generator, fills the bag and the
+ * next queue and spawns the first piece with the config's level and shift
+ * timing. The board starts empty.
+ */
+void game_init_with_config(GameState *game, uint64_t seed, const GameConfig *config);
+
+/* game_init_with_config with game_default_config: level 1, default DAS and ARR. */
 void game_init(GameState *game, uint64_t seed);
 
 /*
@@ -178,6 +206,13 @@ void game_init(GameState *game, uint64_t seed);
  * the next level is always 10 lines per level.
  */
 void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level);
+
+/*
+ * Changes the shift timing of a running game, for a settings change in the
+ * middle of a run. A repeat that is already counting down keeps its current
+ * count; the next DAS or ARR reload uses the new values.
+ */
+void game_set_shift_timing(GameState *game, uint16_t das_ticks, uint16_t arr_ticks);
 
 /*
  * Advances the simulation by exactly one tick.

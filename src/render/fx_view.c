@@ -80,8 +80,9 @@ static void fx_view_draw_trails(Renderer *renderer, const BoardLayout *layout, c
            solid bar without needing another shader style. */
         const float wide = trail->width * cell * FX_VIEW_TRAIL_WIDE_SCALE;
         const float narrow = trail->width * cell;
-        const Color halo = { base.r, base.g, base.b, fade * FX_VIEW_TRAIL_WIDE_ALPHA };
-        const Color core = { base.r, base.g, base.b, fade * FX_VIEW_TRAIL_ALPHA };
+        const float strength = fade * fx->intensity;
+        const Color halo = { base.r, base.g, base.b, strength * FX_VIEW_TRAIL_WIDE_ALPHA };
+        const Color core = { base.r, base.g, base.b, strength * FX_VIEW_TRAIL_ALPHA };
 
         renderer_push_rect(renderer, centre_x - wide * 0.5f, bottom, wide, height, halo);
         renderer_push_rect(renderer, centre_x - narrow * 0.5f, bottom, narrow, height, core);

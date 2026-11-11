@@ -64,6 +64,13 @@ each have a short sound, and a soft clip keeps stacked sounds in range. `M`
 mutes, `--mute` starts muted, and a missing audio device only logs a warning:
 the game runs silent rather than failing.
 
+**Milestone 5** adds screens and a save file. The game opens on a title screen,
+and a main menu starts a run, picks the start level and leads to the high scores
+and the settings. Play pauses into a menu, and a finished run shows a game-over
+menu with its place in the table. The settings cover the volume, the effects
+intensity, DAS, ARR and the key bindings. They and the top ten scores are saved
+to a small text file in the user's data directory.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -134,7 +141,9 @@ git push origin v0.1.0
 ./build/debug/tetris
 ```
 
-Press Escape or close the window to quit.
+The game opens on the title screen; Enter opens the main menu. Escape goes back
+one screen and quits from the title, and closing the window always quits.
+`--play` skips the title and starts a run right away.
 
 F5 recompiles every shader from the active asset directory. A shader that fails
 to compile is logged and the previous program stays in use, so a typo never
@@ -150,6 +159,9 @@ Then edit `assets/shaders/*.frag` and press F5.
 
 ### Controls
 
+The game keys, with their defaults. Each action can have two keys, and
+**Settings > Controls** rebinds them:
+
 | Key | Action |
 | --- | --- |
 | Left / Right arrows | Move left / right (DAS then ARR while held) |
@@ -158,15 +170,72 @@ Then edit `assets/shaders/*.frag` and press F5.
 | Up / X | Rotate clockwise |
 | Z / Left Ctrl | Rotate counter-clockwise |
 | C / Left Shift | Hold |
+
+These keys are fixed and cannot be bound to an action:
+
+| Key | Action |
+| --- | --- |
+| Escape | Pause while playing; back one screen in a menu; quit from the title |
 | P | Pause or resume |
+| R | Restart with a fresh seed (while playing, paused or after game over) |
 | M | Mute or unmute the sound |
-| R | Restart with a fresh seed |
 | F5 | Reload all shaders (for iteration) |
-| Escape | Quit |
+
+In the menus the arrows move and change values, Enter selects, Escape or
+Backspace goes back, and Delete empties a key slot on the controls screen. Space
+does not select, so a player still pressing hard drop when the stack tops out
+does not skip the game-over screen.
 
 Keys are mapped by scancode, so they follow key positions and work on any
 keyboard layout. Holding a key is the game's business: the OS key repeat is
-ignored and DAS/ARR produce the repeats.
+ignored and DAS/ARR produce the repeats. In the menus a held arrow repeats.
+
+### Screens
+
+- **Title**: the seven pieces, the best score so far and **PRESS ENTER**.
+- **Main menu**: **START**, **LEVEL** (the start level, 1 to 15, changed with
+  Left and Right), **HIGH SCORES**, **SETTINGS** and **QUIT**.
+- **Pause**: **RESUME**, **RESTART**, **SETTINGS** and **MAIN MENU**, over the
+  dimmed board. Leaving for the main menu drops the run without a score.
+- **Game over**: the score, **NEW HIGH SCORE!** or the run's place in the table,
+  **PLAY AGAIN** and **MAIN MENU**.
+- **High scores**: the top ten runs with their score, level and lines. The run
+  that just ended is highlighted.
+- **Settings**: **VOLUME** (0 to 10), **EFFECTS** (0 to 10: particles, shake,
+  flashes, trails and the level-up pulse; 0 turns them off), **DAS** and **ARR**
+  (shown in milliseconds; ARR 0 sends the piece straight to the wall) and
+  **CONTROLS**. Changes take effect at once, also in a paused run.
+- **Controls**: two key slots per action. Enter waits for a key, Escape cancels,
+  and a key that another action already uses moves to the new one.
+  **RESET KEYS** puts the defaults back.
+
+### Save file
+
+Settings and the top ten scores are saved to `save.txt` in SDL's preference
+directory, `~/.local/share/tetris/save.txt` on Linux (`$XDG_DATA_HOME` is
+honored). It is plain text: a `TETRIS SAVE` line, `version=1`, then one
+`key=value` per line, with keys as SDL scancode numbers and each score as
+`score level lines seed`:
+
+```
+TETRIS SAVE
+version=1
+volume=7
+effects=10
+das=10
+arr=2
+start_level=1
+key.left=80 0
+key.hold=6 225
+score=12400 4 31 9600400441103183515
+```
+
+The game writes it through a temporary file that is renamed over the old one, so
+a crash in the middle of a save keeps the previous file. Settings are written when
+you leave the settings screens, and a score as soon as the run ends. A missing
+file gives the defaults; a file without the magic line or with an unknown version
+logs a warning and gives the defaults too. Unknown keys and malformed lines are
+skipped, and values out of range are clamped.
 
 ### HUD
 
@@ -183,16 +252,16 @@ half a cell of padding inside its four-cell box instead of touching the frame.
 
 All text comes from a built-in 5x7 bitmap font drawn with the same rectangle
 renderer as the board: no textures and no font files. The font covers space,
-A-Z, 0-9 and `: . - ! ?`; lowercase letters use the uppercase glyph, and any
+A-Z, 0-9 and `: . - ! ? < >`; lowercase letters use the uppercase glyph, and any
 other character is skipped. A ten-digit score shrinks its glyph size a pixel at a
 time until it fits the panel; from a 352x352 framebuffer up (cell size 16) even
 `4294967295` fits.
 
-Pause dims the board and puts **PAUSED** and **PRESS P** over it. Losing window
-focus pauses a running game so the piece does not keep falling, and resuming
-clears the input buffer and the accumulator, so a key held during the pause does
-not fire on the first tick. **R** restarts and unpauses; a finished run shows
-**GAME OVER** and **PRESS R** instead.
+Pause dims the board and puts the pause menu over it. Losing window focus pauses
+a running game so the piece does not keep falling, and resuming clears the input
+buffer and the accumulator, so a key held during the pause does not fire on the
+first tick. **R** restarts and unpauses; a finished run shows the game-over menu
+instead.
 
 ### Audio
 
@@ -254,8 +323,10 @@ device is logged with its driver, name, format and rate.
   `GAME_EVENT_CLEAR_DONE` fires and the next piece spawns. A lock that clears nothing spawns immediately, and a lock out still
   ends the game on the lock tick.
 - **Level** is `start_level + lines_cleared / 10`, so the run levels up every ten
-  lines. `--seed` is the only start-level control for now; the core also offers
-  `game_init_at_level`.
+  lines. The start level is picked on the main menu and saved with the
+  settings.
+- **DAS and ARR** default to 10 and 2 ticks and come from the settings. They are
+  part of the run's `GameState`, so the core stays free of files and settings.
 - **Game over** is a block out (the new piece cannot spawn) or a lock out (a
   piece locks with every cell in the hidden buffer rows). A game that is over
   only advances the tick counter.
@@ -272,12 +343,14 @@ device is logged with its driver, name, format and rate.
 | `--size WxH` | Initial window size in pixels (default `800x600`) |
 | `--seed N` | Simulation seed (default `0x853c49e6748fea9b`) |
 | `--mute` | Start with the sound muted (`M` toggles it) |
+| `--play` | Skip the title and the menu and start a run right away |
 | `--help` | Print usage |
 
-Example: render two seconds worth of frames and grab the result.
+Example: render two seconds worth of frames of a run and grab the result.
+Without `--play` the screenshot shows the title screen.
 
 ```sh
-./build/debug/tetris --frames 120 --screenshot /tmp/shot.bmp
+./build/debug/tetris --play --frames 120 --screenshot /tmp/shot.bmp
 ```
 
 Without `--frames` the screenshot is taken when the window closes, so it works
@@ -304,8 +377,11 @@ from the fx seed, that the game's RNG is untouched, the event-to-effect mapping
 clear-animation keyframes. The audio suite checks every effect's length, peak,
 finite samples, click-free ends and determinism, the short-capacity path, the
 mixer (silence, gains, voices ending mid-block, the soft clip, the master ramp)
-and the event-to-sound precedence. They are a plain assert-style harness — no
-external framework — and they never link SDL or OpenGL.
+and the event-to-sound precedence. The save suite runs the save file parser and
+serializer on strings: a round trip, missing, corrupt and unknown-version files,
+clamped and malformed values, key bindings and the score table. They are a plain
+assert-style harness — no external framework — and they never link SDL or
+OpenGL.
 
 ## Project layout
 
@@ -341,13 +417,17 @@ src/render/                 GL rendering
   text.h/.c                 draws strings as merged pixel-run rectangles
   board_view.h/.c           playfield, ghost, drop beam, active piece and its halo, and the clear animation
   fx_view.h/.c              lock flash, hard-drop trails and additive glow particles
-  hud.h/.c                  hold, next, stats and the paused / game-over overlays
+  hud.h/.c                  hold, next and stats
+  menu_view.h/.c            title, menus, settings, controls and high-score screens
 src/app/                    the one place GL and SDL meet outside platform
   screenshot.h/.c           glReadPixels -> flipped rows -> SDL BMP
   input_buffer.h/.c         SDL-free press/hold buffer between frames and ticks
   input_sdl.h/.c            scancode mapping and SDL event handling
   sound_map.h/.c            GAME_EVENT_* bits to sound requests, precedence only (SDL-free, tested)
-src/main.c                  CLI parsing and the fixed-timestep loop
+  save.h/.c                 settings, key bindings, the score table and the save text format (SDL-free, tested)
+  save_file.h/.c            finding, reading and atomically replacing the save file
+  menu.h/.c                 the screen state machine and its menus (SDL-free)
+src/main.c                  CLI parsing, the screens and the fixed-timestep loop
 tests/test_main.c           assert-style harness, board / RNG / layout suites
 tests/test_piece.c          piece shape and 7-bag suites
 tests/test_game.c           gameplay suites: spawn, movement, gravity, lock delay, clears
@@ -356,11 +436,12 @@ tests/test_font.c           glyph coverage, lowercase mapping and width arithmet
 tests/test_input_buffer.c   input buffer suite plus a tap-through-game_step check
 tests/test_fx.c             particle, event-mapping, shake and clear-animation suites
 tests/test_audio.c          synthesis, mixing and event-to-sound precedence suites
+tests/test_save.c           save file parser, serializer, bindings and score table suites
 ```
 
 Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
 `tetris_view_layout` (static), `tetris_input` (static), `tetris_audio` (static),
-`tetris` (executable), `tetris_tests` (test executable).
+`tetris_app` (static), `tetris` (executable), `tetris_tests` (test executable).
 
 ## Conventions
 

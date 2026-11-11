@@ -122,6 +122,17 @@ target_include_directories(tetris_audio PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 target_link_libraries(tetris_audio PUBLIC tetris_core)
 tetris_enable_warnings(tetris_audio)
 
+# Settings, key bindings, the score table and their text format, plus the
+# screen state machine. No SDL and no file I/O, so the tests can run the parser,
+# the serializer and the menus on plain data.
+add_library(tetris_app STATIC
+    src/app/menu.c
+    src/app/save.c
+)
+target_include_directories(tetris_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(tetris_app PUBLIC tetris_core)
+tetris_enable_warnings(tetris_app)
+
 # --- application ------------------------------------------------------------
 
 # The shaders are also compiled into the executable, so a binary copied on its
@@ -147,19 +158,21 @@ add_custom_command(
 add_executable(tetris
     src/main.c
     src/app/input_sdl.c
+    src/app/save_file.c
     src/app/screenshot.c
     src/audio/audio.c
     src/platform/platform.c
     src/render/board_view.c
     src/render/fx_view.c
     src/render/hud.c
+    src/render/menu_view.c
     src/render/renderer.c
     src/render/shader.c
     src/render/text.c
     "${TETRIS_BUILTIN_SHADERS_C}"
 )
 target_link_libraries(tetris PRIVATE tetris_core tetris_fx tetris_input tetris_audio
-                                     tetris_view_layout glad SDL3::SDL3)
+                                     tetris_view_layout tetris_app glad SDL3::SDL3)
 tetris_enable_warnings(tetris)
 
 # Assets are looked up relative to the executable, so they have to sit next to
@@ -184,9 +197,10 @@ add_executable(tetris_tests
     tests/test_game.c
     tests/test_piece.c
     tests/test_rules.c
+    tests/test_save.c
 )
 target_link_libraries(tetris_tests PRIVATE tetris_core tetris_fx tetris_input tetris_audio
-                                          tetris_view_layout)
+                                          tetris_view_layout tetris_app)
 tetris_enable_warnings(tetris_tests)
 
 add_test(NAME tetris_tests COMMAND tetris_tests)

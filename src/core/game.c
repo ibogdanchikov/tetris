@@ -338,7 +338,7 @@ static void game_step_shift(GameState *game, const GameInput *input)
 
     if (direction != game->shift_dir) {
         game->shift_dir = direction;
-        game->shift_counter = GAME_DAS_TICKS;
+        game->shift_counter = game->das_ticks;
         if (game_try_move(game, direction, 0)) {
             game->events |= GAME_EVENT_MOVE;
             game->last_action_was_rotation = false;
@@ -351,12 +351,18 @@ static void game_step_shift(GameState *game, const GameInput *input)
         --game->shift_counter;
     }
     if (game->shift_counter == 0) {
-        if (game_try_move(game, direction, 0)) {
+        /* ARR 0 repeats without a gap: the piece goes as far as it can. */
+        bool moved = game_try_move(game, direction, 0);
+        if (moved && game->arr_ticks == 0) {
+            while (game_try_move(game, direction, 0)) {
+            }
+        }
+        if (moved) {
             game->events |= GAME_EVENT_MOVE;
             game->last_action_was_rotation = false;
             game_reset_lock_delay(game);
         }
-        game->shift_counter = GAME_ARR_TICKS;
+        game->shift_counter = game->arr_ticks;
     }
 }
 
@@ -364,7 +370,7 @@ static void game_step_shift(GameState *game, const GameInput *input)
  * Horizontal input while there is no piece: the rows cannot move, but DAS/ARR
  * still run. The counter is reloaded exactly as a real repeat would reload it,
  * so after the delay the new piece continues on the same ARR grid instead of
- * waiting out a fresh GAME_DAS_TICKS.
+ * waiting out a fresh DAS.
  */
 static void game_step_shift_charge(GameState *game, const GameInput *input)
 {
@@ -378,7 +384,7 @@ static void game_step_shift_charge(GameState *game, const GameInput *input)
 
     if (direction != game->shift_dir) {
         game->shift_dir = direction;
-        game->shift_counter = GAME_DAS_TICKS;
+        game->shift_counter = game->das_ticks;
         return;
     }
 
@@ -386,7 +392,7 @@ static void game_step_shift_charge(GameState *game, const GameInput *input)
         --game->shift_counter;
     }
     if (game->shift_counter == 0) {
-        game->shift_counter = GAME_ARR_TICKS;
+        game->shift_counter = game->arr_ticks;
     }
 }
 
@@ -579,15 +585,23 @@ static void game_step_hold(GameState *game)
     game_place_spawned(game, incoming);
 }
 
-void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level)
+GameConfig game_default_config(void)
+{
+    const GameConfig config = { 1, GAME_DAS_TICKS, GAME_ARR_TICKS };
+    return config;
+}
+
+void game_init_with_config(GameState *game, uint64_t seed, const GameConfig *config)
 {
     /* Zeroing everything first makes padding deterministic too, so two states
        can be compared with memcmp. */
     memset(game, 0, sizeof *game);
     rng_seed(&game->rng_state, seed);
     bag_init(&game->bag, &game->rng_state);
-    game->start_level = start_level < 1 ? 1 : start_level;
+    game->start_level = config->start_level < 1 ? 1 : config->start_level;
     game->level = game->start_level;
+    game->das_ticks = config->das_ticks;
+    game->arr_ticks = config->arr_ticks;
     for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
         game->next_queue[i] = bag_next(&game->bag, &game->rng_state);
     }
@@ -597,9 +611,23 @@ void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level)
     game->events = 0;
 }
 
+void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level)
+{
+    GameConfig config = game_default_config();
+    config.start_level = start_level;
+    game_init_with_config(game, seed, &config);
+}
+
 void game_init(GameState *game, uint64_t seed)
 {
-    game_init_at_level(game, seed, 1);
+    const GameConfig config = game_default_config();
+    game_init_with_config(game, seed, &config);
+}
+
+void game_set_shift_timing(GameState *game, uint16_t das_ticks, uint16_t arr_ticks)
+{
+    game->das_ticks = das_ticks;
+    game->arr_ticks = arr_ticks;
 }
 
 int game_ghost_y(const GameState *game)

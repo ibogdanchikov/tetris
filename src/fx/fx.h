@@ -126,16 +126,28 @@ typedef struct Fx {
     float level_pulse; /* seconds left of the board frame brightening */
 
     FxShake shake;
+
+    /* How strong the effects are, 0..1; see fx_set_intensity. */
+    float intensity;
 } Fx;
 
-/* Clears all state and seeds the private generator. */
+/* Clears all state, seeds the private generator and sets full intensity. */
 void fx_init(Fx *fx, uint64_t seed);
 
 /*
  * Clears every particle, trail, flash and timer and restarts the private
- * generator from the seed passed to fx_init, so a restart is reproducible.
+ * generator from the seed passed to fx_init, so a restart is reproducible. The
+ * intensity is kept.
  */
 void fx_reset(Fx *fx);
+
+/*
+ * Scales the effects, clamped to 0..1: the particle counts (rounded per cell),
+ * the shake, the lock flash, the hard-drop trails and the level-up pulse. At 1
+ * everything is exactly as tuned below; at 0 none of them happen. The
+ * line-clear animation is not scaled: it shows which rows are going away.
+ */
+void fx_set_intensity(Fx *fx, float intensity);
 
 /*
  * Turns the events of a whole frame into effects. Call it once per frame after
@@ -156,10 +168,10 @@ void fx_update(Fx *fx, float dt);
 /* Number of live particles (life > 0). */
 int fx_particle_count(const Fx *fx);
 
-/* How white the lock flash is right now: 0..1. */
+/* How white the lock flash is right now: 0..1, scaled by the intensity. */
 float fx_lock_flash_amount(const Fx *fx);
 
-/* How bright the level-up frame pulse is right now: 0..1. */
+/* How bright the level-up frame pulse is right now: 0..1, scaled by the intensity. */
 float fx_level_pulse_amount(const Fx *fx);
 
 /* Current screen shake offset in board cells. Both are 0 when the shake is idle. */

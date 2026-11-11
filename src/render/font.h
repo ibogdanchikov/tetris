@@ -8,7 +8,7 @@
  *
  * Each glyph is seven rows of five pixels. Rows are stored top row first and
  * bit 4 (0x10) is the leftmost pixel of a row. Only space, A-Z, 0-9 and
- * ":.-!?" have glyphs. Lowercase letters use the uppercase glyph; any other
+ * ":.-!?<>" have glyphs. Lowercase letters use the uppercase glyph; any other
  * character has no glyph and is drawn as an empty cell that still advances the
  * cursor, so an unsupported character leaves a gap rather than a box.
  */

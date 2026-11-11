@@ -8,20 +8,14 @@
 #include "render/text.h"
 
 /*
- * Neon signage: cyan labels with a cyan glow, near-white values with the same
- * glow, and a pink title on the overlays. Each glow color's alpha is its
- * strength.
+ * Neon signage: cyan labels with a cyan glow and near-white values with the
+ * same glow. Each glow color's alpha is its strength.
  */
 static const Color HUD_BOX_COLOR = { 0.018f, 0.020f, 0.035f, 1.00f };
 static const Color HUD_LABEL_COLOR = { 0.45f, 0.85f, 1.00f, 1.00f };
 static const Color HUD_LABEL_GLOW = { 0.20f, 0.78f, 1.00f, 0.45f };
 static const Color HUD_VALUE_COLOR = { 0.92f, 0.97f, 1.00f, 1.00f };
 static const Color HUD_VALUE_GLOW = { 0.20f, 0.78f, 1.00f, 0.35f };
-static const Color HUD_OVERLAY_COLOR = { 0.00f, 0.00f, 0.02f, 0.75f };
-static const Color HUD_OVERLAY_TITLE_COLOR = { 1.00f, 0.55f, 0.90f, 1.00f };
-static const Color HUD_OVERLAY_TITLE_GLOW = { 1.00f, 0.25f, 0.80f, 0.60f };
-static const Color HUD_OVERLAY_HINT_COLOR = { 0.45f, 0.85f, 1.00f, 1.00f };
-static const Color HUD_OVERLAY_HINT_GLOW = { 0.20f, 0.78f, 1.00f, 0.35f };
 
 /* Empty text pixels between a stat label and its value. */
 #define HUD_STAT_VALUE_GAP_PIXELS 3
@@ -136,41 +130,9 @@ static void hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const 
     hud_draw_stat(renderer, layout, x, top, "LINES", lines);
 }
 
-static void hud_draw_overlay(Renderer *renderer, const BoardLayout *layout, const char *title,
-                             const char *hint)
-{
-    renderer_push_rect(renderer, layout->origin_x, layout->origin_y, (float)layout->width,
-                       (float)layout->height, HUD_OVERLAY_COLOR);
-
-    const int title_pixel = board_layout_fit_text_pixel(
-        layout->width - layout->cell_size, (int)strlen(title), layout->cell_size / 4);
-    int hint_pixel = title_pixel / 2;
-    if (hint_pixel < 1) {
-        hint_pixel = 1;
-    }
-
-    const float title_height = (float)(FONT_GLYPH_H * title_pixel);
-    const float hint_height = (float)(FONT_GLYPH_H * hint_pixel);
-    const float gap = (float)title_pixel;
-    const float block_height = title_height + gap + hint_height;
-    const float bottom = layout->origin_y + ((float)layout->height - block_height) * 0.5f;
-
-    text_draw_centered(renderer, layout->origin_x, bottom + hint_height + gap,
-                       (float)layout->width, title_height, title_pixel, HUD_OVERLAY_TITLE_COLOR,
-                       HUD_OVERLAY_TITLE_GLOW, title);
-    text_draw_centered(renderer, layout->origin_x, bottom, (float)layout->width, hint_height,
-                       hint_pixel, HUD_OVERLAY_HINT_COLOR, HUD_OVERLAY_HINT_GLOW, hint);
-}
-
-void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game, bool paused)
+void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game)
 {
     hud_draw_hold(renderer, layout, game);
     hud_draw_next(renderer, layout, game);
     hud_draw_stats(renderer, layout, game);
-
-    if (game->game_over) {
-        hud_draw_overlay(renderer, layout, "GAME OVER", "PRESS R");
-    } else if (paused) {
-        hud_draw_overlay(renderer, layout, "PAUSED", "PRESS P");
-    }
 }

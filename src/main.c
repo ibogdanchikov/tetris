@@ -9,6 +9,9 @@
 
 #include "app/input_buffer.h"
 #include "app/input_sdl.h"
+#include "app/menu.h"
+#include "app/save.h"
+#include "app/save_file.h"
 #include "app/screenshot.h"
 #include "app/sound_map.h"
 #include "audio/audio.h"
@@ -20,6 +23,7 @@
 #include "render/board_view.h"
 #include "render/fx_view.h"
 #include "render/hud.h"
+#include "render/menu_view.h"
 #include "render/renderer.h"
 
 #define APP_TITLE "Tetris"
@@ -35,8 +39,10 @@
 
 #define APP_SEED_DEFAULT RNG_DEFAULT_SEED
 
-/* The pause blip is an app-level sound, so its gain lives here. */
+/* The pause blip and the menu sounds are app-level sounds, so their gains live here. */
 #define APP_PAUSE_SOUND_GAIN 0.9f
+#define APP_MENU_MOVE_GAIN 0.8f
+#define APP_MENU_SCREEN_GAIN 0.5f
 
 /*
  * ARR repeats GAME_EVENT_MOVE every two ticks, and a tick sound at 30 per
@@ -53,6 +59,7 @@ typedef struct AppOptions {
     int height;
     uint64_t seed;
     bool mute;
+    bool play;            /* skip the title and the menu and start a run */
     bool show_help;
 } AppOptions;
 
@@ -67,6 +74,7 @@ static void app_print_usage(const char *program)
            "  --size WxH        initial window size in pixels (default: %dx%d)\n"
            "  --seed N          simulation seed (default: %llu)\n"
            "  --mute            start with the sound muted (M toggles it)\n"
+           "  --play            start a run right away instead of showing the title\n"
            "  --help            show this message\n",
            program, APP_WIDTH, APP_HEIGHT, (unsigned long long)APP_SEED_DEFAULT);
 }
@@ -113,6 +121,7 @@ static bool app_parse_args(int argc, char **argv, AppOptions *options)
     options->height = APP_HEIGHT;
     options->seed = APP_SEED_DEFAULT;
     options->mute = false;
+    options->play = false;
     options->show_help = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -153,6 +162,8 @@ static bool app_parse_args(int argc, char **argv, AppOptions *options)
             options->seed = (uint64_t)seed;
         } else if (strcmp(arg, "--mute") == 0) {
             options->mute = true;
+        } else if (strcmp(arg, "--play") == 0) {
+            options->play = true;
         } else {
             fprintf(stderr, "error: unknown argument %s\n", arg);
             return false;
@@ -211,10 +222,290 @@ static bool app_shader_dir(const char *assets_dir, char *buffer, size_t buffer_s
     return true;
 }
 
+
 /*
- * The window title is plain "Tetris"; the score, level, lines and every message
- * now live in the HUD, so there is no title state to keep.
+ * Everything one session owns. The window title is plain "Tetris"; the score,
+ * level, lines and every message live on screen, so there is no title state.
  */
+typedef struct App {
+    Platform platform;
+    Renderer renderer;
+    GameState game;
+    Fx fx;
+    Audio audio;
+    InputBuffer input;
+    Menu menu;
+
+    /* Settings and scores, and where they are saved. can_save is false when
+       there is no preference directory; the game then runs without saving. */
+    SaveData save;
+    char save_path[1024];
+    bool can_save;
+    bool settings_dirty; /* changed since the last save */
+
+    /*
+     * Run n is seeded with base_seed + n, so runs are reproducible but do not
+     * replay the same piece order. run_seed is the current run's, kept for the
+     * score table.
+     */
+    uint64_t base_seed;
+    uint32_t run_count;
+    uint64_t run_seed;
+
+    double accumulator;
+
+    /* Tick of the last move tick sound, so ARR does not machine-gun it. */
+    uint64_t last_move_sound_tick;
+    bool have_move_sound;
+} App;
+
+static GameConfig app_game_config(const Settings *settings)
+{
+    GameConfig config = game_default_config();
+    config.start_level = (uint32_t)settings->start_level;
+    config.das_ticks = (uint16_t)settings->das_ticks;
+    config.arr_ticks = (uint16_t)settings->arr_ticks;
+    return config;
+}
+
+/*
+ * Pushes the settings into the parts that use them. The volume steps are
+ * squared, so the low end of the scale is not all one loudness. DAS and ARR
+ * also reach the run in progress, so a change made from the pause menu is felt
+ * right away.
+ */
+static void app_apply_settings(App *app)
+{
+    const Settings *settings = &app->save.settings;
+    const float volume = (float)settings->volume / (float)SETTINGS_VOLUME_MAX;
+    audio_set_volume(&app->audio, volume * volume);
+    fx_set_intensity(&app->fx, (float)settings->effects / (float)SETTINGS_EFFECTS_MAX);
+    game_set_shift_timing(&app->game, (uint16_t)settings->das_ticks,
+                          (uint16_t)settings->arr_ticks);
+}
+
+static void app_save(App *app)
+{
+    if (app->can_save) {
+        (void)save_file_write(app->save_path, &app->save);
+    }
+    app->settings_dirty = false;
+}
+
+/* Starts a new run with the saved start level and shift timing. */
+static void app_start_run(App *app)
+{
+    const GameConfig config = app_game_config(&app->save.settings);
+    app->run_seed = app->base_seed + app->run_count;
+    ++app->run_count;
+    game_init_with_config(&app->game, app->run_seed, &config);
+    fx_reset(&app->fx);
+    audio_stop_all(&app->audio);
+    input_buffer_reset(&app->input);
+    app->accumulator = 0.0;
+    app->have_move_sound = false;
+    app->menu.last_rank = -1;
+    menu_set_screen(&app->menu, SCREEN_PLAYING);
+}
+
+/* Pause and resume share one blip, so a toggle always sounds like a toggle. */
+static void app_pause(App *app)
+{
+    audio_play(&app->audio, SOUND_PAUSE, APP_PAUSE_SOUND_GAIN);
+    menu_set_screen(&app->menu, SCREEN_PAUSED);
+    input_buffer_reset(&app->input);
+    app->accumulator = 0.0;
+}
+
+static void app_resume(App *app)
+{
+    audio_play(&app->audio, SOUND_PAUSE, APP_PAUSE_SOUND_GAIN);
+    menu_set_screen(&app->menu, SCREEN_PLAYING);
+    input_buffer_reset(&app->input);
+    app->accumulator = 0.0;
+}
+
+/* The run ended: record it if it made the table and show the game-over menu. */
+static void app_finish_run(App *app)
+{
+    const HighScore entry = { app->game.score, app->game.level, app->game.lines_cleared,
+                              app->run_seed };
+    const int rank = save_insert_score(&app->save, &entry);
+    if (rank >= 0) {
+        app_save(app);
+    }
+    menu_set_screen(&app->menu, SCREEN_GAME_OVER);
+    app->menu.last_rank = rank;
+}
+
+/* Acts on what the menu asked for. Returns true when the app should quit. */
+static bool app_handle_menu_command(App *app, MenuCommand command)
+{
+    switch (command) {
+    case MENU_COMMAND_MOVED:
+        audio_play(&app->audio, SOUND_MOVE, APP_MENU_MOVE_GAIN);
+        break;
+    case MENU_COMMAND_SCREEN_CHANGED:
+        audio_play(&app->audio, SOUND_ROTATE, APP_MENU_SCREEN_GAIN);
+        break;
+    case MENU_COMMAND_SETTINGS_CHANGED:
+        app_apply_settings(app);
+        app->settings_dirty = true;
+        audio_play(&app->audio, SOUND_MOVE, APP_MENU_MOVE_GAIN);
+        break;
+    case MENU_COMMAND_START_GAME:
+    case MENU_COMMAND_RESTART:
+        app_start_run(app);
+        break;
+    case MENU_COMMAND_RESUME:
+        app_resume(app);
+        break;
+    case MENU_COMMAND_ABANDON:
+        /* The run is dropped without a score: only a finished run counts. */
+        audio_stop_all(&app->audio);
+        fx_reset(&app->fx);
+        menu_set_screen(&app->menu, SCREEN_MAIN_MENU);
+        audio_play(&app->audio, SOUND_ROTATE, APP_MENU_SCREEN_GAIN);
+        break;
+    case MENU_COMMAND_QUIT:
+        return true;
+    case MENU_COMMAND_NONE:
+    default:
+        break;
+    }
+    return false;
+}
+
+/*
+ * Handles one SDL event on whatever screen is showing. Menu keys are applied
+ * one event at a time, so a key that opens the key-binding prompt is not itself
+ * taken as the key to bind. Returns true when the app should quit.
+ */
+static bool app_handle_event(App *app, const SDL_Event *event)
+{
+    AppInputCommands commands;
+    memset(&commands, 0, sizeof commands);
+    const Screen screen = app->menu.screen;
+    const bool was_waiting = app->menu.waiting_for_key;
+    app_input_handle_event(&app->input, &app->save.settings, screen, event, &commands);
+
+    bool quit = commands.quit;
+    if (commands.reload_shaders) {
+        renderer_reload_shaders(&app->renderer);
+    }
+    if (commands.mute_toggle) {
+        audio_set_muted(&app->audio, !audio_muted(&app->audio));
+    }
+
+    /* Losing focus pauses a running game, so the player does not come back to
+       a piece that kept falling; a finished run has nothing to pause. */
+    if (screen == SCREEN_PLAYING && (commands.focus_lost || commands.pause_toggle)) {
+        app_pause(app);
+        return quit;
+    }
+    if (screen == SCREEN_PAUSED && commands.pause_toggle) {
+        app_resume(app);
+        return quit;
+    }
+    if (commands.restart) {
+        app_start_run(app);
+        return quit;
+    }
+    if (screen == SCREEN_PLAYING) {
+        return quit;
+    }
+
+    if (was_waiting) {
+        if (commands.bind_scancode != 0) {
+            quit = app_handle_menu_command(
+                       app, menu_bind_key(&app->menu, &app->save.settings,
+                                          commands.bind_scancode)) ||
+                   quit;
+        }
+        return quit;
+    }
+    for (int i = 0; i < commands.menu_key_count; ++i) {
+        const MenuCommand command =
+            menu_handle_key(&app->menu, &app->save.settings, commands.menu_keys[i]);
+        quit = app_handle_menu_command(app, command) || quit;
+    }
+    return quit;
+}
+
+/*
+ * Runs the ticks the accumulated time pays for while a run is playing, and
+ * returns the frame's events OR-ed together: a frame may run several ticks, and
+ * the effects and sounds consume the combined bits once.
+ */
+static uint32_t app_simulate(App *app, double frame_time)
+{
+    uint32_t frame_events = 0;
+    app->accumulator += frame_time;
+    while (app->accumulator >= SIM_DT) {
+        const GameInput tick_input = input_buffer_take(&app->input);
+        game_step(&app->game, &tick_input);
+        frame_events |= app->game.events;
+        app->accumulator -= SIM_DT;
+    }
+    return frame_events;
+}
+
+/*
+ * Sounds come from the frame's OR-ed bits, once per frame. sound_map owns the
+ * precedence rules; the only thing left here is the ARR tick, which would
+ * otherwise repeat several times a second.
+ */
+static void app_play_event_sounds(App *app, uint32_t frame_events)
+{
+    SoundRequest requests[SOUND_MAP_MAX_REQUESTS];
+    const int request_count =
+        sound_map_events(frame_events, &app->game, requests, SOUND_MAP_MAX_REQUESTS);
+    for (int i = 0; i < request_count; ++i) {
+        if (requests[i].id == SOUND_MOVE) {
+            if (app->have_move_sound &&
+                app->game.tick - app->last_move_sound_tick < APP_MOVE_SOUND_TICKS) {
+                continue;
+            }
+            app->last_move_sound_tick = app->game.tick;
+            app->have_move_sound = true;
+        }
+        audio_play(&app->audio, requests[i].id, requests[i].gain);
+    }
+}
+
+static void app_draw(App *app, float alpha, double now)
+{
+    int fb_width = 0;
+    int fb_height = 0;
+    platform_drawable_size(&app->platform, &fb_width, &fb_height);
+
+    /* The shake only moves a game that is running or has just ended, so a
+       paused board does not sit at a frozen offset. */
+    const Screen screen = app->menu.screen;
+    BoardLayout layout = board_layout_compute(fb_width, fb_height);
+    if (screen == SCREEN_PLAYING || screen == SCREEN_GAME_OVER) {
+        float shake_x = 0.0f;
+        float shake_y = 0.0f;
+        fx_shake_offset(&app->fx, &shake_x, &shake_y);
+        board_layout_translate(&layout, shake_x * (float)layout.cell_size,
+                               shake_y * (float)layout.cell_size);
+    }
+
+    /* Presentation-only time, wrapped to an hour so float precision holds. */
+    const float time_seconds = (float)SDL_fmod(now, 3600.0);
+    renderer_begin(&app->renderer, fb_width, fb_height, time_seconds);
+    renderer_draw_background(&app->renderer);
+    if (!menu_view_hides_game(&app->menu)) {
+        board_view_draw(&app->renderer, &layout, &app->game, alpha,
+                        fx_level_pulse_amount(&app->fx));
+        fx_view_draw(&app->renderer, &layout, &app->fx);
+        hud_draw(&app->renderer, &layout, &app->game);
+    }
+    const MenuViewState view = { &app->menu, &app->save.settings, &app->save, &app->game,
+                                 app_input_key_name, time_seconds };
+    menu_view_draw(&app->renderer, &layout, &view);
+    renderer_end(&app->renderer);
+}
 
 int main(int argc, char **argv)
 {
@@ -233,108 +524,69 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    Platform platform;
-    if (!platform_init(&platform, APP_TITLE, options.width, options.height)) {
+    /* Large state (the particle pool, the voice buffers) lives here, not on the stack. */
+    static App app;
+
+    if (!platform_init(&app.platform, APP_TITLE, options.width, options.height)) {
         fprintf(stderr, "error: platform initialisation failed\n");
         return 1;
     }
 
-    Renderer renderer;
-    if (!renderer_init(&renderer, shader_dir[0] != '\0' ? shader_dir : NULL)) {
+    if (!renderer_init(&app.renderer, shader_dir[0] != '\0' ? shader_dir : NULL)) {
         fprintf(stderr, "error: renderer initialisation failed (shaders in %s)\n",
                 shader_dir[0] != '\0' ? shader_dir : "<built-in>");
-        platform_shutdown(&platform);
+        platform_shutdown(&app.platform);
         return 1;
     }
 
-    GameState game;
-    game_init(&game, options.seed);
+    /* A missing or broken save file is never fatal: the defaults take over. */
+    app.can_save = save_file_path(app.save_path, sizeof app.save_path);
+    if (app.can_save) {
+        save_file_load(app.save_path, &app.save);
+    } else {
+        save_defaults(&app.save);
+    }
+
+    /* A board exists from the start, so every screen has a game to read. */
+    app.base_seed = options.seed;
+    const GameConfig config = app_game_config(&app.save.settings);
+    game_init_with_config(&app.game, app.base_seed, &config);
 
     /*
      * Presentation effects keep their own RNG state, seeded from the same base
      * seed but never shared with the game, so particle jitter cannot change the
      * piece order.
      */
-    Fx fx;
-    fx_init(&fx, options.seed);
+    fx_init(&app.fx, options.seed);
 
     /*
      * Audio is optional: a missing device just logs a warning and every sound
      * call becomes a no-op, so the game always starts.
      */
-    Audio audio;
-    (void)audio_init(&audio);
+    (void)audio_init(&app.audio);
     if (options.mute) {
-        audio_set_muted(&audio, true);
+        audio_set_muted(&app.audio, true);
     }
+    app_apply_settings(&app);
 
-    InputBuffer input;
-    input_buffer_reset(&input);
-
-    /*
-     * A restart re-seeds the game from the base seed plus the restart count, so
-     * restarts are reproducible but do not replay the same piece order.
-     */
-    const uint64_t base_seed = options.seed;
-    uint32_t restart_count = 0;
+    input_buffer_reset(&app.input);
+    menu_init(&app.menu);
+    if (options.play) {
+        app_start_run(&app);
+    }
 
     int exit_code = 0;
     long frames_rendered = 0;
-    double accumulator = 0.0;
     double last_time = platform_time_seconds();
     bool quit = false;
-    bool paused = false;
-
-    /* Ticks of the last move tick sound, so ARR does not machine-gun it. */
-    uint64_t last_move_sound_tick = 0;
-    bool have_move_sound = false;
 
     while (!quit) {
-        /* Events arrive at frame rate; presses are buffered until a game tick. */
-        AppInputCommands commands = { false, false, false, false, false, false };
+        /* Events arrive at frame rate; game presses are buffered until a tick. */
         SDL_Event event;
-        while (platform_next_event(&platform, &event)) {
-            app_input_handle_event(&input, &event, &commands);
-        }
-        if (commands.quit) {
-            quit = true;
-        }
-        if (commands.reload_shaders) {
-            renderer_reload_shaders(&renderer);
-        }
-        if (commands.restart) {
-            ++restart_count;
-            game_init(&game, base_seed + restart_count);
-            fx_reset(&fx);
-            audio_stop_all(&audio);
-            input_buffer_reset(&input);
-            accumulator = 0.0;
-            paused = false;
-            have_move_sound = false;
-        }
-        if (commands.mute_toggle) {
-            audio_set_muted(&audio, !audio_muted(&audio));
-        }
-
-        /*
-         * Pause is app state, not game state. Losing focus pauses a running game
-         * so the player does not come back to a piece that kept falling; a
-         * finished run has nothing to pause. The same blip serves pause and
-         * resume, so a toggle always sounds like a toggle.
-         */
-        if (commands.focus_lost && !game.game_over) {
-            if (!paused) {
-                audio_play(&audio, SOUND_PAUSE, APP_PAUSE_SOUND_GAIN);
+        while (platform_next_event(&app.platform, &event)) {
+            if (app_handle_event(&app, &event)) {
+                quit = true;
             }
-            paused = true;
-            input_buffer_reset(&input);
-            accumulator = 0.0;
-        }
-        if (commands.pause_toggle && !game.game_over) {
-            paused = !paused;
-            audio_play(&audio, SOUND_PAUSE, APP_PAUSE_SOUND_GAIN);
-            input_buffer_reset(&input);
-            accumulator = 0.0;
         }
 
         const double now = platform_time_seconds();
@@ -347,101 +599,68 @@ int main(int argc, char **argv)
         }
 
         /*
-         * Events are reported per tick, but a frame may run several ticks, so
-         * they are OR-ed together for the whole frame. The fx layer consumes the
-         * combined bits once, after the ticks.
+         * Only a running game ticks. Every other screen drops the backlog and
+         * any buffered keys, so nothing pressed in a menu fires on resume.
+         * Effects keep moving on the game-over screen, so the last burst
+         * finishes; pause freezes them with the game.
          */
-        uint32_t frame_events = 0;
-
-        if (paused) {
-            /* No ticks and no backlog: keys pressed now must not fire on resume. */
-            input_buffer_reset(&input);
-            accumulator = 0.0;
+        const Screen screen = app.menu.screen;
+        if (screen == SCREEN_PLAYING) {
+            const uint32_t frame_events = app_simulate(&app, frame_time);
+            fx_on_events(&app.fx, frame_events, &app.game);
+            fx_update(&app.fx, (float)frame_time);
+            app_play_event_sounds(&app, frame_events);
+            if (app.game.game_over) {
+                app_finish_run(&app);
+            }
         } else {
-            accumulator += frame_time;
-            while (accumulator >= SIM_DT) {
-                const GameInput tick_input = input_buffer_take(&input);
-                game_step(&game, &tick_input);
-                frame_events |= game.events;
-                accumulator -= SIM_DT;
+            input_buffer_reset(&app.input);
+            app.accumulator = 0.0;
+            if (screen == SCREEN_GAME_OVER) {
+                fx_update(&app.fx, (float)frame_time);
             }
         }
 
-        /*
-         * Pause freezes the effects with the game: no timers, no particle
-         * motion. The shake is not applied while paused either, so the board
-         * does not sit at a frozen offset for the whole pause.
-         */
-        if (!paused) {
-            fx_on_events(&fx, frame_events, &game);
-            fx_update(&fx, (float)frame_time);
-
-            /*
-             * Sounds come from the same OR-ed bits, once per frame. sound_map
-             * owns the precedence rules; the only thing left here is the ARR
-             * tick, which would otherwise repeat several times a second.
-             */
-            SoundRequest requests[SOUND_MAP_MAX_REQUESTS];
-            const int request_count =
-                sound_map_events(frame_events, &game, requests, SOUND_MAP_MAX_REQUESTS);
-            for (int i = 0; i < request_count; ++i) {
-                if (requests[i].id == SOUND_MOVE) {
-                    if (have_move_sound &&
-                        game.tick - last_move_sound_tick < APP_MOVE_SOUND_TICKS) {
-                        continue;
-                    }
-                    last_move_sound_tick = game.tick;
-                    have_move_sound = true;
-                }
-                audio_play(&audio, requests[i].id, requests[i].gain);
-            }
+        /* Settings are written once the player leaves the screens that change
+           them, not on every arrow press. */
+        if (app.settings_dirty && app.menu.screen != SCREEN_SETTINGS &&
+            app.menu.screen != SCREEN_CONTROLS && app.menu.screen != SCREEN_MAIN_MENU) {
+            app_save(&app);
         }
 
-        const float alpha = (float)(accumulator / SIM_DT);
-
-        int fb_width = 0;
-        int fb_height = 0;
-        platform_drawable_size(&platform, &fb_width, &fb_height);
-
-        BoardLayout layout = board_layout_compute(fb_width, fb_height);
-        if (!paused) {
-            float shake_x = 0.0f;
-            float shake_y = 0.0f;
-            fx_shake_offset(&fx, &shake_x, &shake_y);
-            board_layout_translate(&layout, shake_x * (float)layout.cell_size,
-                                   shake_y * (float)layout.cell_size);
-        }
-
-        /* Presentation-only time, wrapped to an hour so float precision holds. */
-        renderer_begin(&renderer, fb_width, fb_height, (float)SDL_fmod(now, 3600.0));
-        renderer_draw_background(&renderer);
-        board_view_draw(&renderer, &layout, &game, alpha, fx_level_pulse_amount(&fx));
-        fx_view_draw(&renderer, &layout, &fx);
-        hud_draw(&renderer, &layout, &game, paused);
-        renderer_end(&renderer);
+        const float alpha =
+            app.menu.screen == SCREEN_PLAYING ? (float)(app.accumulator / SIM_DT) : 0.0f;
+        app_draw(&app, alpha, now);
 
         ++frames_rendered;
         const bool last_frame = quit || (options.frames > 0 && frames_rendered >= options.frames);
 
         /* Read the back buffer before presenting it: after the swap it is undefined. */
         if (last_frame && options.screenshot_path != NULL) {
+            int fb_width = 0;
+            int fb_height = 0;
+            platform_drawable_size(&app.platform, &fb_width, &fb_height);
             if (!screenshot_save_bmp(fb_width, fb_height, options.screenshot_path)) {
                 exit_code = 1;
             }
         }
 
-        platform_swap(&platform);
+        platform_swap(&app.platform);
 
         if (last_frame) {
             break;
         }
     }
 
-    SDL_Log("rendered %ld frames, simulation tick %llu", frames_rendered,
-            (unsigned long long)game.tick);
+    if (app.settings_dirty) {
+        app_save(&app);
+    }
 
-    audio_shutdown(&audio);
-    renderer_shutdown(&renderer);
-    platform_shutdown(&platform);
+    SDL_Log("rendered %ld frames, simulation tick %llu", frames_rendered,
+            (unsigned long long)app.game.tick);
+
+    audio_shutdown(&app.audio);
+    renderer_shutdown(&app.renderer);
+    platform_shutdown(&app.platform);
     return exit_code;
 }

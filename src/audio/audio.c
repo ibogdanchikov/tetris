@@ -55,7 +55,7 @@ static void SDLCALL audio_mix_callback(void *userdata, SDL_AudioStream *stream,
 
         /* Move the master gain one step towards its target, then ramp across
            the block, so muting fades instead of clicking. */
-        const float target = audio->muted ? 0.0f : AUDIO_MASTER_GAIN;
+        const float target = audio->muted ? 0.0f : AUDIO_MASTER_GAIN * audio->volume;
         const float from = audio->master_gain;
         float to = target;
         if (target - from > AUDIO_GAIN_STEP) {
@@ -97,6 +97,7 @@ bool audio_init(Audio *audio)
 {
     memset(audio, 0, sizeof *audio);
     audio->master_gain = AUDIO_MASTER_GAIN;
+    audio->volume = 1.0f;
 
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "audio disabled: SDL_InitSubSystem: %s",
@@ -159,7 +160,7 @@ bool audio_init(Audio *audio)
 
 void audio_play(Audio *audio, SoundId id, float gain)
 {
-    if (audio == NULL || !audio->ready || audio->muted) {
+    if (audio == NULL || !audio->ready || audio->muted || audio->volume <= 0.0f) {
         return;
     }
     if ((unsigned)id >= (unsigned)SOUND_COUNT) {
@@ -231,6 +232,27 @@ void audio_set_muted(Audio *audio, bool muted)
 bool audio_muted(const Audio *audio)
 {
     return audio != NULL && audio->muted;
+}
+
+void audio_set_volume(Audio *audio, float volume)
+{
+    if (audio == NULL) {
+        return;
+    }
+    if (!(volume > 0.0f)) {
+        volume = 0.0f;
+    } else if (volume > 1.0f) {
+        volume = 1.0f;
+    }
+    if (!audio->ready) {
+        audio->volume = volume;
+        return;
+    }
+    if (!SDL_LockAudioStream(audio->stream)) {
+        return;
+    }
+    audio->volume = volume;
+    SDL_UnlockAudioStream(audio->stream);
 }
 
 void audio_shutdown(Audio *audio)

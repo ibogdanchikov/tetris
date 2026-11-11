@@ -45,6 +45,12 @@ static void fx_shake_trigger(Fx *fx, float amplitude, float direction_x, float d
  * front and ageing out together. A full pool refuses the spawn; see fx.h for why
  * dropping beats overwriting.
  */
+/* A per-cell particle count scaled by the intensity, rounded to the nearest. */
+static int fx_scaled_count(const Fx *fx, int count)
+{
+    return (int)((float)count * fx->intensity + 0.5f);
+}
+
 static FxParticle *fx_alloc_particle(Fx *fx)
 {
     for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
@@ -119,7 +125,7 @@ static void fx_spawn_line_effects(Fx *fx, const GameState *game)
             }
 
             const float centre_offset = ((float)x + 0.5f) - (float)BOARD_WIDTH * 0.5f;
-            for (int n = 0; n < FX_LINE_PARTICLES_PER_CELL; ++n) {
+            for (int n = 0; n < fx_scaled_count(fx, FX_LINE_PARTICLES_PER_CELL); ++n) {
                 const float jitter = fx_random_unit(fx);
                 const float side = fx_random_unit(fx);
                 const float lift = fx_random_unit(fx);
@@ -169,7 +175,7 @@ static void fx_spawn_lock_effects(Fx *fx, const GameState *game)
         if (ys[i] != lowest) {
             continue;
         }
-        for (int n = 0; n < FX_LOCK_DUST_PER_CELL; ++n) {
+        for (int n = 0; n < fx_scaled_count(fx, FX_LOCK_DUST_PER_CELL); ++n) {
             const float side = fx_random_unit(fx);
             const float fall = fx_random_unit(fx);
             fx_spawn_particle(fx, (float)xs[i] + 0.2f + side * 0.6f, (float)ys[i] - 0.05f,
@@ -187,7 +193,7 @@ static void fx_spawn_lock_effects(Fx *fx, const GameState *game)
  */
 static void fx_spawn_hard_drop_effects(Fx *fx, const GameState *game)
 {
-    if (game->last_hard_drop_rows == 0) {
+    if (game->last_hard_drop_rows == 0 || fx->intensity <= 0.0f) {
         return;
     }
 
@@ -267,6 +273,7 @@ static void fx_spawn_hard_drop_effects(Fx *fx, const GameState *game)
 static void fx_shake_trigger(Fx *fx, float amplitude, float direction_x, float direction_y,
                              float duration)
 {
+    amplitude *= fx->intensity;
     if (amplitude <= 0.0f || duration <= 0.0f) {
         return;
     }
@@ -295,14 +302,22 @@ void fx_init(Fx *fx, uint64_t seed)
     memset(fx, 0, sizeof *fx);
     fx->seed = seed;
     rng_seed(&fx->rng_state, seed);
+    fx->intensity = 1.0f;
 }
 
 void fx_reset(Fx *fx)
 {
     const uint64_t seed = fx->seed;
+    const float intensity = fx->intensity;
     memset(fx, 0, sizeof *fx);
     fx->seed = seed;
     rng_seed(&fx->rng_state, seed);
+    fx->intensity = intensity;
+}
+
+void fx_set_intensity(Fx *fx, float intensity)
+{
+    fx->intensity = fx_clamp01(intensity);
 }
 
 void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game)
@@ -408,12 +423,12 @@ int fx_particle_count(const Fx *fx)
 
 float fx_lock_flash_amount(const Fx *fx)
 {
-    return fx_clamp01(fx->lock_flash / FX_LOCK_FLASH_SECONDS);
+    return fx_clamp01(fx->lock_flash / FX_LOCK_FLASH_SECONDS) * fx->intensity;
 }
 
 float fx_level_pulse_amount(const Fx *fx)
 {
-    return fx_clamp01(fx->level_pulse / FX_LEVEL_PULSE_SECONDS);
+    return fx_clamp01(fx->level_pulse / FX_LEVEL_PULSE_SECONDS) * fx->intensity;
 }
 
 void fx_shake_offset(const Fx *fx, float *out_x, float *out_y)
