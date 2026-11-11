@@ -181,17 +181,33 @@ static CellType board_view_locked_type(const GameState *game, int x, int y)
  * the grid around the stack but never washes over a block.
  */
 static void board_view_draw_locked(Renderer *renderer, const BoardLayout *layout,
-                                   const GameState *game)
+                                   const GameState *game, const Fx *fx)
 {
     const float cell = (float)layout->cell_size;
 
+    /* How far each row is drawn above its place while it falls after a clear. */
+    float lift[BOARD_VISIBLE_HEIGHT];
+    bool falling = false;
+    for (int y = 0; y < BOARD_VISIBLE_HEIGHT; ++y) {
+        lift[y] = fx_row_drop_offset(fx, y) * cell;
+        falling = falling || lift[y] > 0.0f;
+    }
+
+    /* A falling block has not reached its slot yet, so the slot is drawn empty
+       under it. */
     for (int y = 0; y < BOARD_VISIBLE_HEIGHT; ++y) {
         for (int x = 0; x < BOARD_WIDTH; ++x) {
-            if (board_view_locked_type(game, x, y) == CELL_EMPTY) {
+            if (board_view_locked_type(game, x, y) == CELL_EMPTY || lift[y] > 0.0f) {
                 board_view_push_cell(renderer, board_view_cell_x(layout, x),
                                      board_view_cell_y(layout, y), cell, BOARD_VIEW_EMPTY_COLOR);
             }
         }
+    }
+
+    /* Falling rows start above where they land, some of them above the board:
+       nothing may show over the top of the frame. */
+    if (falling) {
+        renderer_set_clip(renderer, 0, 0, 1 << 15, (int)(layout->origin_y + (float)layout->height));
     }
 
     renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
@@ -200,7 +216,7 @@ static void board_view_draw_locked(Renderer *renderer, const BoardLayout *layout
             const CellType type = board_view_locked_type(game, x, y);
             if (type != CELL_EMPTY) {
                 board_view_push_glow(renderer, board_view_cell_x(layout, x) + cell * 0.5f,
-                                     board_view_cell_y(layout, y) + cell * 0.5f,
+                                     board_view_cell_y(layout, y) + lift[y] + cell * 0.5f,
                                      cell * BOARD_VIEW_BLOCK_GLOW_CELLS, BOARD_VIEW_PALETTE[type],
                                      BOARD_VIEW_BLOCK_GLOW_ALPHA, 0.0f);
             }
@@ -213,11 +229,15 @@ static void board_view_draw_locked(Renderer *renderer, const BoardLayout *layout
             const CellType type = board_view_locked_type(game, x, y);
             if (type != CELL_EMPTY) {
                 board_view_push_block(renderer, board_view_cell_x(layout, x),
-                                      board_view_cell_y(layout, y), cell,
+                                      board_view_cell_y(layout, y) + lift[y], cell,
                                       BOARD_VIEW_PALETTE[type],
                                       (float)(1 + x + y * BOARD_WIDTH));
             }
         }
+    }
+
+    if (falling) {
+        renderer_clear_clip(renderer);
     }
 }
 
@@ -486,14 +506,14 @@ void board_view_draw_preview(Renderer *renderer, LayoutRect box, int cell_size, 
 }
 
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
-                     float alpha, float frame_pulse)
+                     float alpha, const Fx *fx)
 {
     /* Playfield first: frame, grid and locked cells, then the falling piece. */
     const LayoutRect board = { layout->origin_x, layout->origin_y, (float)layout->width,
                                (float)layout->height };
-    board_view_draw_neon_frame(renderer, board, layout->cell_size, frame_pulse);
+    board_view_draw_neon_frame(renderer, board, layout->cell_size, fx_level_pulse_amount(fx));
     renderer_push_rect(renderer, board.x, board.y, board.w, board.h, BOARD_VIEW_GRID_COLOR);
-    board_view_draw_locked(renderer, layout, game);
+    board_view_draw_locked(renderer, layout, game, fx);
 
     /* While rows are clearing they are still on the board, and there is no
        active piece to draw until the delay ends. */

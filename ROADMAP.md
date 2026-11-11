@@ -57,12 +57,19 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - A clear label in the left panel under the stats, kept and faded by `src/fx`, sized to fit the panel at every window size.
 - `tests/test_scoring.c` covers the rule corner by corner, a T-spin double made by a real rotation, minis, back-to-back, combos, perfect clears, the label text and fade, and replay determinism with spins.
 
+### Milestone 7, part 1: "Let the rows above a clear fall into place"
+
+- On `GAME_EVENT_CLEAR_DONE` the fx layer copies the removed rows and starts a 0.15 s timer; `fx_row_drop_offset` gives each row's height above its place, easing from the rows it fell to 0.
+- `board_view` draws the moved rows that high, with an empty slot under them, clipped at the top of the playfield. `board_view_draw` takes the `Fx` instead of the frame pulse.
+- The core is untouched: rows are removed on the same tick, and the score and the replay timing are the same.
+
 ## Current status
 
 ### What works
 
 - The full game loop: spawn, gravity, soft and hard drop, SRS rotation with kicks, hold, next queue, lock delay, line clears, scoring and levels.
 - T-spins and mini T-spins, back-to-back bonuses, combos and perfect clears, with a fading label that names each notable clear.
+- After a clear, the rows above fall into place instead of jumping.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
 - A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
@@ -82,6 +89,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 ### Not verified on this machine
 
 - A T-spin, a perfect clear or a combo made in a real game by a person. The rules are unit tested and the label was drawn on screen, but nobody has played one here.
+- The row drop at full speed in a real game. Its offsets were checked with a throwaway program (clears of rows 0-1, 2, 1 and 3, and 0-3, plus a lock in the same frame) and drawn from a scratch build pinned at the start, middle and end of the fall, but not watched in motion.
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here.
 - Windows and macOS builds.
@@ -110,12 +118,11 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ### Milestone 7: presentation polish
 
-**Goal:** make the game look and sound finished without changing the simulation.
+**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation is done (part 1); the rest is below.
 
 **Scope**
 
 - Real font rendering from a texture atlas.
-- Row-drop animation after a clear.
 - More particle types.
 - Post-processing bloom through an offscreen framebuffer.
 - Music.
@@ -123,7 +130,6 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 **Design notes**
 
 - The current renderer has no texture support. A font atlas needs a textured quad path, or a second small pipeline; it is not a drop-in replacement for `text_draw`. Pick either a checked-in atlas or a small vendored TrueType rasterizer, and keep the current pixel font as a fallback.
-- Row-drop animation must not delay the simulation. The core removes rows on the `GAME_EVENT_CLEAR_DONE` tick. To animate the fall, record the removed rows and enough of the pre-clear board for the view to interpolate, or snapshot the board in the app before the removal tick. The rules and the replay timing stay unchanged.
 - Bloom needs an offscreen framebuffer, a downsample/blur pass and an additive composite. It also needs resize handling, because the FBO must follow the drawable size.
 - Music needs a voice that the sound-effect pool cannot steal, plus its own volume. The existing mixer has one fixed pool, so either reserve a voice or add a second stream.
 - Keep every new effect optional or cheap enough to run on Mesa llvmpipe, which the README lists as a supported fallback.
@@ -131,7 +137,6 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 **Done when**
 
 - Text renders at arbitrary sizes from an atlas, and the HUD remains readable at the minimum supported window size.
-- Cleared rows visibly fall after the delay, and the simulation tick and score are unchanged.
 - At least two new particle types are in use and tested for lifetime and pool bounds.
 - Bloom can be turned off and on, and the frame time on the current software renderer stays acceptable.
 - Music loops without clicks, can be muted, and does not steal sound-effect voices.

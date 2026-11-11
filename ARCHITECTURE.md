@@ -60,7 +60,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Lock delay has a reset budget.** A resting piece gets `GAME_LOCK_DELAY_TICKS` (30) ticks. A successful move or rotation while grounded resets the timer, up to `GAME_MAX_LOCK_RESETS` (15) times. Reaching a row the piece has never been in refreshes both the timer and the budget; leaving the ground without reaching a new row does not.
 
-**Line clears have a delay phase.** Score, line count and `GAME_EVENT_LINE_CLEAR` happen on the lock tick. The full rows stay on the board for `GAME_LINE_CLEAR_DELAY_TICKS` (24) ticks in `GAME_PHASE_CLEARING`; input is ignored except that a held LEFT/RIGHT keeps charging DAS. When the timer runs out, the rows are removed, `GAME_EVENT_CLEAR_DONE` fires and the next piece spawns.
+**Line clears have a delay phase.** Score, line count and `GAME_EVENT_LINE_CLEAR` happen on the lock tick. The full rows stay on the board for `GAME_LINE_CLEAR_DELAY_TICKS` (24) ticks in `GAME_PHASE_CLEARING`; input is ignored except that a held LEFT/RIGHT keeps charging DAS. When the timer runs out, the rows are removed, `GAME_EVENT_CLEAR_DONE` fires and the next piece spawns. The fall of the rows above is presentation only: `fx` copies `cleared_rows` on that event and `board_view` draws the moved rows above their place for `FX_ROW_DROP_SECONDS`, so the rules and the replay timing do not change.
 
 ## Modules
 
@@ -201,7 +201,7 @@ void renderer_shutdown(Renderer *renderer);
 
 ```c
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
-                     float alpha, float frame_pulse);
+                     float alpha, const Fx *fx);
 void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx);
 void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
               const Fx *fx);
@@ -223,7 +223,7 @@ void fx_shake_offset(const Fx *fx, float *out_x, float *out_y);
 void fx_clear_visual(float progress, FxClearVisual *out);
 ```
 
-`fx_on_events` consumes the frame's OR-ed event bits and the game snapshots. On a lock whose `last_clear` is notable (a T-spin, four lines, back-to-back, a combo or a perfect clear) it also keeps a copy for the clear label; `fx_label_lines` turns it into text and `fx_label_alpha` fades it. `fx_set_intensity` (0 to 1, kept by `fx_reset`) scales the particle counts per cell, the shake, the lock flash, the trails and the level-up pulse; at 1 everything is exactly as tuned, at 0 none of it happens. The line-clear animation and the clear label are not scaled: they tell the player what happened. `fx_update` advances timers and particles by `dt`, clamped to `FX_MAX_DT` (0.1 s). `fx_shake_offset` returns the current shake in board cells. `fx_clear_visual` maps normalized clear progress to the flash amount and per-column visibility used by `board_view`.
+`fx_on_events` consumes the frame's OR-ed event bits and the game snapshots. On a lock whose `last_clear` is notable (a T-spin, four lines, back-to-back, a combo or a perfect clear) it also keeps a copy for the clear label; `fx_label_lines` turns it into text and `fx_label_alpha` fades it. `fx_set_intensity` (0 to 1, kept by `fx_reset`) scales the particle counts per cell, the shake, the lock flash, the trails and the level-up pulse; at 1 everything is exactly as tuned, at 0 none of it happens. The line-clear animation and the clear label are not scaled: they tell the player what happened. On `GAME_EVENT_CLEAR_DONE` it keeps the removed rows for the row drop, and any lock ends that drop; `fx_row_drop_offset` says how many cells above its place a row is drawn, which `board_view_draw` reads along with `fx_level_pulse_amount`. `fx_update` advances timers and particles by `dt`, clamped to `FX_MAX_DT` (0.1 s). `fx_shake_offset` returns the current shake in board cells. `fx_clear_visual` maps normalized clear progress to the flash amount and per-column visibility used by `board_view`.
 
 ### Audio
 

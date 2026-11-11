@@ -496,8 +496,7 @@ static void app_draw(App *app, float alpha, double now)
     renderer_begin(&app->renderer, fb_width, fb_height, time_seconds);
     renderer_draw_background(&app->renderer);
     if (!menu_view_hides_game(&app->menu)) {
-        board_view_draw(&app->renderer, &layout, &app->game, alpha,
-                        fx_level_pulse_amount(&app->fx));
+        board_view_draw(&app->renderer, &layout, &app->game, alpha, &app->fx);
         fx_view_draw(&app->renderer, &layout, &app->fx);
         hud_draw(&app->renderer, &layout, &app->game, &app->fx);
     }

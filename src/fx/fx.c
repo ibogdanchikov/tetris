@@ -330,6 +330,22 @@ static bool fx_clear_is_notable(const GameClearResult *clear)
 
 void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game)
 {
+    /*
+     * The stack changes on every lock, so a fall in progress ends there. A
+     * frame that holds both bits locked after the rows were removed (a clear
+     * takes GAME_LINE_CLEAR_DELAY_TICKS to finish), so it starts no fall.
+     */
+    if ((frame_events & GAME_EVENT_LOCK) != 0) {
+        fx->row_drop.life = 0.0f;
+    } else if ((frame_events & GAME_EVENT_CLEAR_DONE) != 0 && game->cleared_row_count > 0) {
+        const int count = game->cleared_row_count > 4 ? 4 : game->cleared_row_count;
+        for (int i = 0; i < count; ++i) {
+            fx->row_drop.rows[i] = game->cleared_rows[i];
+        }
+        fx->row_drop.count = (uint8_t)count;
+        fx->row_drop.life = FX_ROW_DROP_SECONDS;
+    }
+
     if ((frame_events & GAME_EVENT_LOCK) != 0 && fx_clear_is_notable(&game->last_clear)) {
         fx->label.clear = game->last_clear;
         fx->label.life = FX_LABEL_SECONDS;
@@ -350,6 +366,12 @@ void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game)
 
 void fx_update(Fx *fx, float dt)
 {
+    if (dt > 0.0f && fx->row_drop.life > 0.0f) {
+        fx->row_drop.life -= dt > FX_MAX_DT ? FX_MAX_DT : dt;
+        if (fx->row_drop.life < 0.0f) {
+            fx->row_drop.life = 0.0f;
+        }
+    }
     if (dt > 0.0f && fx->label.life > 0.0f) {
         fx->label.life -= dt > FX_MAX_DT ? FX_MAX_DT : dt;
         if (fx->label.life < 0.0f) {
@@ -447,6 +469,32 @@ float fx_lock_flash_amount(const Fx *fx)
 float fx_level_pulse_amount(const Fx *fx)
 {
     return fx_clamp01(fx->level_pulse / FX_LEVEL_PULSE_SECONDS) * fx->intensity;
+}
+
+float fx_row_drop_offset(const Fx *fx, int row)
+{
+    if (fx->row_drop.life <= 0.0f) {
+        return 0.0f;
+    }
+
+    /*
+     * The rows were removed lowest first, so walking them in order finds how
+     * many were under this row's old place: each one at or below it pushes the
+     * old place up by one.
+     */
+    int distance = 0;
+    for (int i = 0; i < fx->row_drop.count; ++i) {
+        if ((int)fx->row_drop.rows[i] <= row + distance) {
+            ++distance;
+        }
+    }
+    if (distance == 0) {
+        return 0.0f;
+    }
+
+    /* Starts at rest and speeds up: the distance left falls with time squared. */
+    const float progress = 1.0f - fx_clamp01(fx->row_drop.life / FX_ROW_DROP_SECONDS);
+    return (float)distance * (1.0f - progress * progress);
 }
 
 float fx_label_alpha(const Fx *fx)

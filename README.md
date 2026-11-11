@@ -76,6 +76,12 @@ mini T-spins, back-to-back bonuses, combos and perfect clears, scored from a
 table. A label in the left panel names a notable clear (for example **B2B**,
 **T-SPIN**, **DOUBLE**, **COMBO 2**) and fades out after a moment.
 
+**Milestone 7, part 1** lets the rows above a line clear fall into place. Once
+the cleared rows are gone, the rows that moved are drawn where they were and drop
+to their new place over 0.15 seconds, speeding up as they go. Only the drawing
+changes: the rows are removed on the same tick as before, and the score and the
+replay timing are untouched.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -525,6 +531,10 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
   clipped to half a cell around the playfield, so a burst never paints over the
   HUD. The lock flash is the only alpha-blended effect; the level-up pulse
   brightens the additive neon frame.
+- After a clear, the rows that moved fall into place over `FX_ROW_DROP_SECONDS`
+  (0.15 s). `fx` keeps the removed rows and works out how far each row fell;
+  `board_view` draws the locked cells that many cells higher, easing to 0, and
+  clips them at the top of the playfield. A lock during the fall ends it.
 - Pixel coordinates in the renderer have their origin in the **bottom-left**
   corner, which matches board row 0 being the bottom row.
 - The layout centres the left panel, playfield and right panel as one group, so

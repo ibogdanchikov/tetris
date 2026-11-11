@@ -90,6 +90,21 @@ typedef struct FxShake {
 } FxShake;
 
 /*
+ * After a line clear the rows above the cleared ones fall into place: the core
+ * moves them on the GAME_EVENT_CLEAR_DONE tick, and the view draws them falling
+ * from where they were over FX_ROW_DROP_SECONDS, speeding up like a dropped
+ * object. Like the clear animation it shows what happened to the stack, so the
+ * effects intensity does not scale it.
+ */
+#define FX_ROW_DROP_SECONDS 0.15f
+
+typedef struct FxRowDrop {
+    uint8_t rows[4]; /* the cleared rows as they were before the removal, lowest first */
+    uint8_t count;
+    float life;      /* seconds left; <= 0 means nothing is falling */
+} FxRowDrop;
+
+/*
  * The label for a notable clear: a T-spin, four lines, a back-to-back bonus, a
  * combo or a perfect clear. It keeps a copy of the lock's GameClearResult and
  * stays up FX_LABEL_SECONDS, fading out over the last FX_LABEL_FADE_SECONDS.
@@ -145,6 +160,7 @@ typedef struct Fx {
     FxShake shake;
 
     FxLabel label;
+    FxRowDrop row_drop;
 
     /* How strong the effects are, 0..1; see fx_set_intensity. */
     float intensity;
@@ -194,6 +210,15 @@ float fx_lock_flash_amount(const Fx *fx);
 
 /* How bright the level-up frame pulse is right now: 0..1, scaled by the intensity. */
 float fx_level_pulse_amount(const Fx *fx);
+
+/*
+ * How far above its board row a row of locked cells is drawn while the rows
+ * above a clear fall into place, in cells: the number of cleared rows that were
+ * under it at the start, easing to 0. Rows below the cleared ones, and every
+ * row outside the animation, are at 0. A new lock ends the animation, so a
+ * piece that locks during it is never drawn falling.
+ */
+float fx_row_drop_offset(const Fx *fx, int row);
 
 /* How visible the clear label is: 1 while it is up, fading to 0 at the end. */
 float fx_label_alpha(const Fx *fx);

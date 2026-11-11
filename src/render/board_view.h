@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/game.h"
+#include "fx/fx.h"
 #include "render/board_layout.h"
 #include "render/renderer.h"
 
@@ -18,14 +19,18 @@
  * The HUD panels and the paused/game-over overlays live in render/hud.h; call
  * board_view_draw first.
  *
+ * After the rows are removed, the locked rows that moved fall into place over
+ * a few frames, drawn fx_row_drop_offset cells above their board row and
+ * clipped at the top of the playfield.
+ *
  * alpha is the fixed-timestep interpolation factor; it smooths the line-clear
  * animation between ticks.
  *
- * frame_pulse (0..1) brightens the board frame for the level-up effect; the fx
- * layer owns the timer, this only draws it.
+ * fx supplies the level-up frame pulse, which brightens the board frame, and
+ * the row-drop offsets; the fx layer owns both timers, this only draws them.
  */
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
-                     float alpha, float frame_pulse);
+                     float alpha, const Fx *fx);
 
 /*
  * Draws the neon frame around a box: a glowing tube just outside it with
