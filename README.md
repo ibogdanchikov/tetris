@@ -82,11 +82,18 @@ to their new place over 0.15 seconds, speeding up as they go. Only the drawing
 changes: the rows are removed on the same tick as before, and the score and the
 replay timing are untouched.
 
+**Milestone 7, part 2** adds bloom. The scene is drawn into an offscreen
+texture, its brightest parts are taken down to a quarter of the size and
+blurred, and the blur is added back over the scene, so the neon tubes, blocks
+and text glow into the dark around them. **Settings > BLOOM** turns it off and
+on; it is on by default.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
 - SDL3 (>= 3.2) and its development headers
-- An OpenGL 3.3 core capable driver (Mesa llvmpipe works too)
+- An OpenGL 3.3 core capable driver (Mesa llvmpipe works too; turn **BLOOM** off
+  there for a faster frame, see [Bloom](#bloom))
 
 On Ubuntu 24.04/26.04 and derivatives:
 
@@ -213,9 +220,10 @@ ignored and DAS/ARR produce the repeats. In the menus a held arrow repeats.
 - **High scores**: the top ten runs with their score, level and lines. The run
   that just ended is highlighted.
 - **Settings**: **VOLUME** (0 to 10), **EFFECTS** (0 to 10: particles, shake,
-  flashes, trails and the level-up pulse; 0 turns them off), **DAS** and **ARR**
-  (shown in milliseconds; ARR 0 sends the piece straight to the wall) and
-  **CONTROLS**. Changes take effect at once, also in a paused run.
+  flashes, trails and the level-up pulse; 0 turns them off), **BLOOM** (on or
+  off), **DAS** and **ARR** (shown in milliseconds; ARR 0 sends the piece
+  straight to the wall) and **CONTROLS**. Changes take effect at once, also in a
+  paused run.
 - **Controls**: two key slots per action. Enter waits for a key, Escape cancels,
   and a key that another action already uses moves to the new one.
   **RESET KEYS** puts the defaults back.
@@ -233,6 +241,7 @@ TETRIS SAVE
 version=1
 volume=7
 effects=10
+bloom=1
 das=10
 arr=2
 start_level=1
@@ -279,6 +288,28 @@ a running game so the piece does not keep falling, and resuming clears the input
 buffer and the accumulator, so a key held during the pause does not fire on the
 first tick. **R** restarts and unpauses; a finished run shows the game-over menu
 instead.
+
+### Bloom
+
+With **BLOOM** on, `renderer_begin` points drawing at an offscreen texture the
+size of the window, rebuilt whenever the window size changes. `renderer_end`
+then runs three full-screen passes: `bloom_extract.frag` keeps what is brighter
+than 0.75 (the largest color channel, with a soft knee) at a quarter of the
+size, `bloom_blur.frag` blurs it twice along x and then y, and
+`bloom_composite.frag` draws the scene with the blur added at 1.2 times its
+strength. The result ends up in the window's back buffer, so screenshots include
+it. If the bloom shaders or buffers cannot be built, the game logs it and draws
+without bloom.
+
+Frame times measured with Mesa llvmpipe (software rendering, the static stack
+from the screenshots, vsync on but never reached):
+
+| Size | Bloom off | Bloom on |
+| --- | --- | --- |
+| 800x600 | 18.6 ms | 25.5 - 27.0 ms |
+| 1920x1080 | 39 ms | 57 ms |
+
+On the Intel Iris Xe GPU both stay at the 16.7 ms vsync interval at 1920x1080.
 
 ### Audio
 
@@ -431,7 +462,8 @@ CMakePresets.json           debug / release / debug-sanitizers presets
 cmake/embed_shaders.cmake   turns assets/shaders into a generated C file for the built-in copies
 packaging/linux/            Dockerfile and build.sh for the single-file Linux binary
 .github/workflows/release.yml  builds that binary and attaches it to a release on a v* tag
-assets/shaders/             quad.vert, quad.frag, background.vert, background.frag (GLSL 330 core)
+assets/shaders/             quad.vert, quad.frag, background.vert, background.frag and the three
+                            bloom passes: bloom_extract, bloom_blur, bloom_composite (GLSL 330 core)
 external/glad/              vendored GLAD2 loader (see its README)
 src/core/                   pure game logic: no SDL, no GL, no malloc, no clock
   board.h/.c                playfield storage, row 0 is the bottom row, hidden buffer rows on top

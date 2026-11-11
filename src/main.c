@@ -280,6 +280,7 @@ static void app_apply_settings(App *app)
     const float volume = (float)settings->volume / (float)SETTINGS_VOLUME_MAX;
     audio_set_volume(&app->audio, volume * volume);
     fx_set_intensity(&app->fx, (float)settings->effects / (float)SETTINGS_EFFECTS_MAX);
+    renderer_set_bloom(&app->renderer, settings->bloom != 0);
     game_set_shift_timing(&app->game, (uint16_t)settings->das_ticks,
                           (uint16_t)settings->arr_ticks);
 }

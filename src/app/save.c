@@ -58,6 +58,7 @@ void settings_defaults(Settings *settings)
     memset(settings, 0, sizeof *settings);
     settings->volume = SETTINGS_VOLUME_MAX;
     settings->effects = SETTINGS_EFFECTS_MAX;
+    settings->bloom = 1;
     settings->das_ticks = GAME_DAS_TICKS;
     settings->arr_ticks = GAME_ARR_TICKS;
     settings->start_level = 1;
@@ -87,6 +88,7 @@ void settings_clamp(Settings *settings)
 {
     settings->volume = settings_clamp_int(settings->volume, 0, SETTINGS_VOLUME_MAX);
     settings->effects = settings_clamp_int(settings->effects, 0, SETTINGS_EFFECTS_MAX);
+    settings->bloom = settings_clamp_int(settings->bloom, 0, 1);
     settings->das_ticks =
         settings_clamp_int(settings->das_ticks, SETTINGS_DAS_MIN, SETTINGS_DAS_MAX);
     settings->arr_ticks = settings_clamp_int(settings->arr_ticks, 0, SETTINGS_ARR_MAX);
@@ -320,6 +322,8 @@ static void save_apply_line(const char *key, const char *value, SaveData *save)
         (void)save_parse_int(value, &settings->volume);
     } else if (strcmp(key, "effects") == 0) {
         (void)save_parse_int(value, &settings->effects);
+    } else if (strcmp(key, "bloom") == 0) {
+        (void)save_parse_int(value, &settings->bloom);
     } else if (strcmp(key, "das") == 0) {
         (void)save_parse_int(value, &settings->das_ticks);
     } else if (strcmp(key, "arr") == 0) {
@@ -441,10 +445,11 @@ size_t save_serialize(const SaveData *save, char *buffer, size_t capacity)
     size_t used = 0;
     char line[SAVE_MAX_LINE];
     int length = snprintf(line, sizeof line,
-                          "%s\nversion=%d\nvolume=%d\neffects=%d\ndas=%d\narr=%d\n"
+                          "%s\nversion=%d\nvolume=%d\neffects=%d\nbloom=%d\ndas=%d\narr=%d\n"
                           "start_level=%d\n",
                           SAVE_MAGIC, SAVE_FORMAT_VERSION, settings.volume, settings.effects,
-                          settings.das_ticks, settings.arr_ticks, settings.start_level);
+                          settings.bloom, settings.das_ticks, settings.arr_ticks,
+                          settings.start_level);
     bool ok = save_append(buffer, capacity, &used, line, length);
 
     for (int action = 0; ok && action < BIND_ACTION_COUNT; ++action) {

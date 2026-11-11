@@ -16,7 +16,8 @@ static bool save_parse_text(const char *text, SaveData *out)
 
 static bool settings_equal(const Settings *a, const Settings *b)
 {
-    return a->volume == b->volume && a->effects == b->effects && a->das_ticks == b->das_ticks &&
+    return a->volume == b->volume && a->effects == b->effects && a->bloom == b->bloom &&
+           a->das_ticks == b->das_ticks &&
            a->arr_ticks == b->arr_ticks && a->start_level == b->start_level &&
            memcmp(a->keys, b->keys, sizeof a->keys) == 0;
 }
@@ -43,6 +44,7 @@ static void test_save_round_trip(void)
     save_defaults(&save);
     save.settings.volume = 3;
     save.settings.effects = 0;
+    save.settings.bloom = 0;
     save.settings.das_ticks = 7;
     save.settings.arr_ticks = 0;
     save.settings.start_level = 12;

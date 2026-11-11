@@ -137,7 +137,8 @@ tetris_enable_warnings(tetris_app)
 
 # The shaders are also compiled into the executable, so a binary copied on its
 # own (the downloadable release) still runs. Files next to the executable win.
-set(TETRIS_SHADER_NAMES quad.vert quad.frag background.vert background.frag)
+set(TETRIS_SHADER_NAMES quad.vert quad.frag background.vert background.frag
+                        bloom_extract.frag bloom_blur.frag bloom_composite.frag)
 set(TETRIS_SHADER_SOURCES "")
 foreach(name IN LISTS TETRIS_SHADER_NAMES)
     list(APPEND TETRIS_SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/${name}")

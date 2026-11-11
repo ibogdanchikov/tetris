@@ -17,7 +17,7 @@ static const MenuItem MENU_GAME_OVER_ITEMS[] = {
 };
 
 static const MenuItem MENU_SETTINGS_ITEMS[] = {
-    MENU_ITEM_VOLUME, MENU_ITEM_EFFECTS, MENU_ITEM_DAS,
+    MENU_ITEM_VOLUME, MENU_ITEM_EFFECTS,  MENU_ITEM_BLOOM, MENU_ITEM_DAS,
     MENU_ITEM_ARR,    MENU_ITEM_CONTROLS, MENU_ITEM_BACK,
 };
 
@@ -142,6 +142,8 @@ const char *menu_item_label(MenuItem item)
         return "VOLUME";
     case MENU_ITEM_EFFECTS:
         return "EFFECTS";
+    case MENU_ITEM_BLOOM:
+        return "BLOOM";
     case MENU_ITEM_DAS:
         return "DAS";
     case MENU_ITEM_ARR:
@@ -174,6 +176,10 @@ static int *menu_item_setting(MenuItem item, Settings *settings, int *out_min, i
         *out_min = 0;
         *out_max = SETTINGS_EFFECTS_MAX;
         return &settings->effects;
+    case MENU_ITEM_BLOOM:
+        *out_min = 0;
+        *out_max = 1;
+        return &settings->bloom;
     case MENU_ITEM_DAS:
         *out_min = SETTINGS_DAS_MIN;
         *out_max = SETTINGS_DAS_MAX;
@@ -225,6 +231,9 @@ void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t 
         } else {
             snprintf(out, size, "%d", settings->effects);
         }
+        break;
+    case MENU_ITEM_BLOOM:
+        snprintf(out, size, "%s", settings->bloom != 0 ? "ON" : "OFF");
         break;
     case MENU_ITEM_DAS:
         snprintf(out, size, "%d MS", menu_ticks_to_ms(settings->das_ticks));

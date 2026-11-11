@@ -70,6 +70,7 @@ typedef enum MenuItem {
     MENU_ITEM_PLAY_AGAIN,
     MENU_ITEM_VOLUME,
     MENU_ITEM_EFFECTS,
+    MENU_ITEM_BLOOM,
     MENU_ITEM_DAS,
     MENU_ITEM_ARR,
     MENU_ITEM_CONTROLS,
@@ -97,8 +98,8 @@ void menu_init(Menu *menu);
 void menu_set_screen(Menu *menu, Screen screen);
 
 /*
- * Applies one menu key on the current screen. Value rows (volume, effects, DAS,
- * ARR, start level) change with LEFT and RIGHT and report
+ * Applies one menu key on the current screen. Value rows (volume, effects,
+ * bloom, DAS, ARR, start level) change with LEFT and RIGHT and report
  * MENU_COMMAND_SETTINGS_CHANGED. PLAYING ignores every key; the app handles
  * the game keys itself. Call menu_bind_key instead while waiting_for_key.
  */

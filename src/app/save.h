@@ -16,6 +16,7 @@
  *     version=1
  *     volume=10
  *     effects=10
+ *     bloom=1
  *     das=10
  *     arr=2
  *     start_level=1
@@ -92,6 +93,7 @@ typedef enum BindAction {
 typedef struct Settings {
     int volume;      /* 0..SETTINGS_VOLUME_MAX */
     int effects;     /* 0..SETTINGS_EFFECTS_MAX */
+    int bloom;       /* 0 = off, 1 = on */
     int das_ticks;   /* SETTINGS_DAS_MIN..SETTINGS_DAS_MAX */
     int arr_ticks;   /* 0..SETTINGS_ARR_MAX */
     int start_level; /* 1..SETTINGS_START_LEVEL_MAX */
@@ -112,7 +114,8 @@ typedef struct SaveData {
     int score_count;
 } SaveData;
 
-/* Full volume and effects, the core's DAS and ARR, level 1 and the default keys. */
+/* Full volume and effects, bloom on, the core's DAS and ARR, level 1 and the
+   default keys. */
 void settings_defaults(Settings *settings);
 
 /* Default settings and an empty score table. */

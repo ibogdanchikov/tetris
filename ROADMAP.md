@@ -63,6 +63,13 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - `board_view` draws the moved rows that high, with an empty slot under them, clipped at the top of the playfield. `board_view_draw` takes the `Fx` instead of the frame pulse.
 - The core is untouched: rows are removed on the same tick, and the score and the replay timing are the same.
 
+### Milestone 7, part 2: "Add bloom"
+
+- With bloom on, the frame is drawn into an offscreen texture that follows the drawable size; `renderer_end` extracts the bright parts at a quarter of the size, blurs them twice along x and y, and adds them back over the scene.
+- Three new shaders, `bloom_extract.frag`, `bloom_blur.frag` and `bloom_composite.frag`, drawn with the full-screen `background.vert` and built into the executable like the others. F5 reloads them.
+- A **BLOOM** setting (on by default), saved as `bloom=` in the save file; the existing round-trip test covers it.
+- Without the shaders or with incomplete framebuffers the game logs once and draws without bloom.
+
 ## Current status
 
 ### What works
@@ -70,6 +77,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - The full game loop: spawn, gravity, soft and hard drop, SRS rotation with kicks, hold, next queue, lock delay, line clears, scoring and levels.
 - T-spins and mini T-spins, back-to-back bonuses, combos and perfect clears, with a fading label that names each notable clear.
 - After a clear, the rows above fall into place instead of jumping.
+- Bloom over the whole picture, switchable in the settings.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
 - A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
@@ -89,6 +97,8 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 ### Not verified on this machine
 
 - A T-spin, a perfect clear or a combo made in a real game by a person. The rules are unit tested and the label was drawn on screen, but nobody has played one here.
+- Bloom was captured on and off, with three threshold and strength pairs and two buffer sizes compared side by side before picking 0.75 and 1.2 at a quarter of the size. The single-file release binary built bloom from its built-in shaders. Frame times from a throwaway build that timed frames 30 to 150: with llvmpipe, 18.6 ms off and 25.5 to 27.0 ms on at 800x600, 39 ms off and 57 ms on at 1920x1080. On the Iris Xe both stayed at the 16.7 ms vsync interval at 1920x1080 (vsync could not be turned off on Wayland, so the true GPU cost is not known).
+- Window resizing with bloom on. The buffers are rebuilt on every size change, and every run here started at a new size, but nobody has dragged a window edge.
 - The row drop at full speed in a real game. Its offsets were checked with a throwaway program (clears of rows 0-1, 2, 1 and 3, and 0-3, plus a lock in the same frame) and drawn from a scratch build pinned at the start, middle and end of the fall, but not watched in motion.
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here.
@@ -113,24 +123,23 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - The loop has no frame limiter of its own. It relies on vsync through `SDL_GL_SetSwapInterval(1)` and only logs a warning when the driver refuses it, so an uncapped driver would spin the loop.
 - The move-sound throttle lives in `main.c` (`APP_MOVE_SOUND_TICKS`) rather than in `sound_map`, so the mapping is not fully described by the SDL-free module.
 - A screenshot is uncompressed BMP. At 800x600 it is about 1.9 MB.
+- Bloom is on by default on every renderer, by choice: with llvmpipe it costs about 7 ms a frame at 800x600 and 18 ms at 1920x1080, and a player who wants the frames back turns it off in the settings. The game does not detect llvmpipe to pick another default.
 
 ## Planned milestones
 
 ### Milestone 7: presentation polish
 
-**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation is done (part 1); the rest is below.
+**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation (part 1) and bloom (part 2) are done; the rest is below.
 
 **Scope**
 
 - Real font rendering from a texture atlas.
 - More particle types.
-- Post-processing bloom through an offscreen framebuffer.
 - Music.
 
 **Design notes**
 
 - The current renderer has no texture support. A font atlas needs a textured quad path, or a second small pipeline; it is not a drop-in replacement for `text_draw`. Pick either a checked-in atlas or a small vendored TrueType rasterizer, and keep the current pixel font as a fallback.
-- Bloom needs an offscreen framebuffer, a downsample/blur pass and an additive composite. It also needs resize handling, because the FBO must follow the drawable size.
 - Music needs a voice that the sound-effect pool cannot steal, plus its own volume. The existing mixer has one fixed pool, so either reserve a voice or add a second stream.
 - Keep every new effect optional or cheap enough to run on Mesa llvmpipe, which the README lists as a supported fallback.
 
@@ -138,7 +147,6 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 - Text renders at arbitrary sizes from an atlas, and the HUD remains readable at the minimum supported window size.
 - At least two new particle types are in use and tested for lifetime and pool bounds.
-- Bloom can be turned off and on, and the frame time on the current software renderer stays acceptable.
 - Music loops without clicks, can be muted, and does not steal sound-effect voices.
 
 ## Later / ideas

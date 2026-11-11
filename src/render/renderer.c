@@ -137,6 +137,214 @@ static void renderer_load_background_program(Renderer *renderer)
     renderer->background_time_uniform = time_uniform;
 }
 
+/*
+ * Loads one full-screen pass: background.vert (the full-screen triangle) with a
+ * bloom fragment shader. source_name is the sampler the pass reads its main
+ * input from. A failure keeps the previous program, like the background.
+ */
+static void renderer_load_pass(Renderer *renderer, const char *frag_name,
+                               const char *source_name, RendererPass *pass)
+{
+    const GLuint program = renderer_build_program(renderer, "background.vert", frag_name);
+    if (program == 0) {
+        fprintf(stderr, "renderer: %s failed to load; %s\n", frag_name,
+                pass->program != 0 ? "keeping the previous program" : "no bloom");
+        return;
+    }
+
+    RendererPass loaded;
+    loaded.program = program;
+    loaded.resolution_uniform = glGetUniformLocation(program, "u_resolution");
+    loaded.source_uniform = glGetUniformLocation(program, source_name);
+    loaded.source_texel_uniform = glGetUniformLocation(program, "u_source_texel");
+    loaded.threshold_uniform = glGetUniformLocation(program, "u_threshold");
+    loaded.direction_uniform = glGetUniformLocation(program, "u_direction");
+    loaded.bloom_uniform = glGetUniformLocation(program, "u_bloom");
+    loaded.strength_uniform = glGetUniformLocation(program, "u_strength");
+    if (loaded.resolution_uniform < 0 || loaded.source_uniform < 0) {
+        fprintf(stderr, "renderer: %s is missing u_resolution or %s; %s\n", frag_name,
+                source_name, pass->program != 0 ? "keeping the previous program" : "no bloom");
+        glDeleteProgram(program);
+        return;
+    }
+
+    if (pass->program != 0) {
+        glDeleteProgram(pass->program);
+    }
+    *pass = loaded;
+}
+
+static void renderer_load_bloom_programs(Renderer *renderer)
+{
+    renderer_load_pass(renderer, "bloom_extract.frag", "u_source", &renderer->bloom_extract);
+    renderer_load_pass(renderer, "bloom_blur.frag", "u_source", &renderer->bloom_blur);
+    renderer_load_pass(renderer, "bloom_composite.frag", "u_scene", &renderer->bloom_composite);
+}
+
+static bool renderer_bloom_programs_ready(const Renderer *renderer)
+{
+    return renderer->bloom_extract.program != 0 && renderer->bloom_blur.program != 0 &&
+           renderer->bloom_composite.program != 0;
+}
+
+/* One side of the bloom textures: the scene side downscaled, at least 1. */
+static int renderer_bloom_size(int scene_size)
+{
+    const int size = scene_size / RENDERER_BLOOM_DOWNSCALE;
+    return size > 0 ? size : 1;
+}
+
+static void renderer_delete_bloom_buffers(Renderer *renderer)
+{
+    if (renderer->scene_fbo != 0) {
+        glDeleteFramebuffers(1, &renderer->scene_fbo);
+    }
+    if (renderer->scene_texture != 0) {
+        glDeleteTextures(1, &renderer->scene_texture);
+    }
+    for (int i = 0; i < 2; ++i) {
+        if (renderer->bloom_fbo[i] != 0) {
+            glDeleteFramebuffers(1, &renderer->bloom_fbo[i]);
+        }
+        if (renderer->bloom_texture[i] != 0) {
+            glDeleteTextures(1, &renderer->bloom_texture[i]);
+        }
+        renderer->bloom_fbo[i] = 0;
+        renderer->bloom_texture[i] = 0;
+    }
+    renderer->scene_fbo = 0;
+    renderer->scene_texture = 0;
+    renderer->bloom_source_width = 0;
+    renderer->bloom_source_height = 0;
+}
+
+/* One render target: a linearly filtered texture and the framebuffer that draws
+   into it. Returns whether the framebuffer is complete. */
+static bool renderer_make_target(int width, int height, GLint internal_format, GLenum type,
+                                 GLuint *out_texture, GLuint *out_fbo)
+{
+    glGenTextures(1, out_texture);
+    glBindTexture(GL_TEXTURE_2D, *out_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, GL_RGBA, type, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, out_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *out_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *out_texture, 0);
+    return glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+}
+
+/*
+ * Builds the scene texture at the drawable size and the two bloom textures at
+ * a quarter of it. The bloom textures are half floats, so the faint ends of
+ * the blur do not band.
+ */
+static bool renderer_build_bloom_buffers(Renderer *renderer, int width, int height)
+{
+    renderer_delete_bloom_buffers(renderer);
+
+    const int bloom_width = renderer_bloom_size(width);
+    const int bloom_height = renderer_bloom_size(height);
+
+    bool complete = renderer_make_target(width, height, GL_RGBA8, GL_UNSIGNED_BYTE,
+                                         &renderer->scene_texture, &renderer->scene_fbo);
+    for (int i = 0; i < 2; ++i) {
+        complete = renderer_make_target(bloom_width, bloom_height, GL_RGBA16F, GL_FLOAT,
+                                        &renderer->bloom_texture[i], &renderer->bloom_fbo[i]) &&
+                   complete;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (!complete) {
+        fprintf(stderr, "renderer: bloom framebuffers are incomplete at %dx%d; no bloom\n",
+                width, height);
+        renderer_delete_bloom_buffers(renderer);
+        return false;
+    }
+    renderer->bloom_source_width = width;
+    renderer->bloom_source_height = height;
+    return true;
+}
+
+/*
+ * The bloom passes, from the scene texture to the default framebuffer: the
+ * bright parts at a quarter of the size, a blur along x and y (twice), then the
+ * scene with the blur added. Blending and the clip are off for all of them.
+ */
+static void renderer_run_bloom(Renderer *renderer)
+{
+    const int width = renderer->bloom_source_width;
+    const int height = renderer->bloom_source_height;
+    const int bloom_width = renderer_bloom_size(width);
+    const int bloom_height = renderer_bloom_size(height);
+
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glBindVertexArray(renderer->background_vao);
+    glActiveTexture(GL_TEXTURE0);
+
+    const RendererPass *extract = &renderer->bloom_extract;
+    glBindFramebuffer(GL_FRAMEBUFFER, renderer->bloom_fbo[0]);
+    glViewport(0, 0, bloom_width, bloom_height);
+    glUseProgram(extract->program);
+    glUniform2f(extract->resolution_uniform, (float)bloom_width, (float)bloom_height);
+    glUniform1i(extract->source_uniform, 0);
+    glUniform2f(extract->source_texel_uniform, 1.0f / (float)width, 1.0f / (float)height);
+    glUniform1f(extract->threshold_uniform, RENDERER_BLOOM_THRESHOLD);
+    glBindTexture(GL_TEXTURE_2D, renderer->scene_texture);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    const RendererPass *blur = &renderer->bloom_blur;
+    glUseProgram(blur->program);
+    glUniform2f(blur->resolution_uniform, (float)bloom_width, (float)bloom_height);
+    glUniform1i(blur->source_uniform, 0);
+    for (int pass = 0; pass < RENDERER_BLOOM_BLUR_PASSES; ++pass) {
+        glBindFramebuffer(GL_FRAMEBUFFER, renderer->bloom_fbo[1]);
+        glBindTexture(GL_TEXTURE_2D, renderer->bloom_texture[0]);
+        glUniform2f(blur->direction_uniform, 1.0f / (float)bloom_width, 0.0f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, renderer->bloom_fbo[0]);
+        glBindTexture(GL_TEXTURE_2D, renderer->bloom_texture[1]);
+        glUniform2f(blur->direction_uniform, 0.0f, 1.0f / (float)bloom_height);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    const RendererPass *composite = &renderer->bloom_composite;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width, height);
+    glUseProgram(composite->program);
+    glUniform2f(composite->resolution_uniform, (float)width, (float)height);
+    glUniform1i(composite->source_uniform, 0);
+    glUniform1i(composite->bloom_uniform, 1);
+    glUniform1f(composite->strength_uniform, RENDERER_BLOOM_STRENGTH);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, renderer->bloom_texture[0]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, renderer->scene_texture);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindVertexArray(0);
+    glEnable(GL_BLEND);
+}
+
+void renderer_set_bloom(Renderer *renderer, bool enabled)
+{
+    renderer->bloom_wanted = enabled;
+    if (!enabled) {
+        /* Free the buffers; turning bloom back on builds them again. */
+        renderer_delete_bloom_buffers(renderer);
+    }
+}
+
 bool renderer_init(Renderer *renderer, const char *shader_dir)
 {
     memset(renderer, 0, sizeof *renderer);
@@ -159,6 +367,9 @@ bool renderer_init(Renderer *renderer, const char *shader_dir)
 
     /* The background is best effort: the flat clear is a perfectly good fallback. */
     renderer_load_background_program(renderer);
+
+    /* So is bloom: without its shaders the frame goes straight to the screen. */
+    renderer_load_bloom_programs(renderer);
 
     /* Unit quad as a triangle strip: (0,0) (1,0) (0,1) (1,1). */
     static const float quad_vertices[] = {
@@ -219,6 +430,19 @@ void renderer_begin(Renderer *renderer, int fb_w, int fb_h, float time_seconds)
     renderer->viewport_width = fb_w;
     renderer->viewport_height = fb_h;
     renderer->time_seconds = time_seconds;
+
+    /* With bloom the frame goes into the scene texture, which follows the
+       drawable size; renderer_end puts it on screen. */
+    renderer->bloom_active = false;
+    if (renderer->bloom_wanted && !renderer->bloom_broken && fb_w > 0 && fb_h > 0 &&
+        renderer_bloom_programs_ready(renderer)) {
+        if ((fb_w != renderer->bloom_source_width || fb_h != renderer->bloom_source_height) &&
+            !renderer_build_bloom_buffers(renderer, fb_w, fb_h)) {
+            renderer->bloom_broken = true;
+        }
+        renderer->bloom_active = !renderer->bloom_broken;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, renderer->bloom_active ? renderer->scene_fbo : 0);
 
     glViewport(0, 0, fb_w, fb_h);
     glDisable(GL_DEPTH_TEST);
@@ -319,6 +543,7 @@ bool renderer_reload_shaders(Renderer *renderer)
     }
 
     renderer_load_background_program(renderer);
+    renderer_load_bloom_programs(renderer);
 
     if (renderer->program != 0) {
         glUseProgram(renderer->program);
@@ -332,11 +557,23 @@ bool renderer_reload_shaders(Renderer *renderer)
 void renderer_end(Renderer *renderer)
 {
     renderer_flush(renderer);
+    if (renderer->bloom_active) {
+        renderer_run_bloom(renderer);
+    }
     glUseProgram(0);
 }
 
 void renderer_shutdown(Renderer *renderer)
 {
+    renderer_delete_bloom_buffers(renderer);
+    RendererPass *passes[] = { &renderer->bloom_extract, &renderer->bloom_blur,
+                               &renderer->bloom_composite };
+    for (size_t i = 0; i < sizeof passes / sizeof passes[0]; ++i) {
+        if (passes[i]->program != 0) {
+            glDeleteProgram(passes[i]->program);
+            passes[i]->program = 0;
+        }
+    }
     if (renderer->instance_vbo != 0) {
         glDeleteBuffers(1, &renderer->instance_vbo);
         renderer->instance_vbo = 0;

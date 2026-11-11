@@ -79,6 +79,30 @@ typedef enum RenderBlend {
     RENDER_BLEND_ADDITIVE = 1, /* src alpha, one: glows add up */
 } RenderBlend;
 
+/*
+ * Bloom: the scene is drawn into an offscreen texture, its bright parts are
+ * taken down to 1/RENDERER_BLOOM_DOWNSCALE of the size and blurred
+ * RENDERER_BLOOM_BLUR_PASSES times along x and then y, and the blur is added
+ * back over the scene at RENDERER_BLOOM_STRENGTH. Brightness above
+ * RENDERER_BLOOM_THRESHOLD (0..1, the largest color channel) blooms.
+ */
+#define RENDERER_BLOOM_DOWNSCALE 4
+#define RENDERER_BLOOM_BLUR_PASSES 2
+#define RENDERER_BLOOM_THRESHOLD 0.75f
+#define RENDERER_BLOOM_STRENGTH 1.20f
+
+/* One full-screen pass program and its uniforms; -1 for a uniform it lacks. */
+typedef struct RendererPass {
+    GLuint program;
+    GLint resolution_uniform;
+    GLint source_uniform;
+    GLint source_texel_uniform; /* extract only */
+    GLint threshold_uniform;    /* extract only */
+    GLint direction_uniform;    /* blur only */
+    GLint bloom_uniform;        /* composite only */
+    GLint strength_uniform;     /* composite only */
+} RendererPass;
+
 typedef struct Renderer {
     GLuint program;
     GLuint background_program;
@@ -98,6 +122,27 @@ typedef struct Renderer {
     RenderBlend blend;
     char shader_dir[1024]; /* kept so F5 can reload from the same place; "" = built in */
     float *instances; /* capacity * RENDERER_INSTANCE_FLOATS floats */
+
+    /*
+     * Bloom state. bloom_wanted is the setting; bloom_active is whether this
+     * frame is being drawn offscreen for it. The scene texture follows the
+     * drawable size and the two bloom textures are the downscaled ping-pong
+     * pair; all three are rebuilt when the size changes. bloom_broken is set
+     * when the buffers could not be built, so the game draws without bloom
+     * instead of retrying every frame.
+     */
+    bool bloom_wanted;
+    bool bloom_active;
+    bool bloom_broken;
+    RendererPass bloom_extract;
+    RendererPass bloom_blur;
+    RendererPass bloom_composite;
+    GLuint scene_fbo;
+    GLuint scene_texture;
+    GLuint bloom_fbo[2];
+    GLuint bloom_texture[2];
+    int bloom_source_width; /* drawable size the buffers were built for */
+    int bloom_source_height;
 } Renderer;
 
 /*
@@ -116,6 +161,10 @@ bool renderer_init(Renderer *renderer, const char *shader_dir);
  * afterwards are in pixel coordinates with the origin in the bottom-left corner
  * of the framebuffer. time_seconds is presentation-only time: it drives the
  * background drift and the block sheen, never the game.
+ *
+ * With bloom on, the frame is drawn into the offscreen scene texture instead,
+ * which is (re)built here whenever the drawable size changes; renderer_end puts
+ * it on screen. Nothing else changes for the caller.
  */
 void renderer_begin(Renderer *renderer, int fb_w, int fb_h, float time_seconds);
 
@@ -161,8 +210,20 @@ void renderer_set_blend(Renderer *renderer, RenderBlend blend);
  */
 bool renderer_reload_shaders(Renderer *renderer);
 
-/* Flushes whatever is still queued. */
+/*
+ * Flushes whatever is still queued. With bloom on it then runs the bloom passes
+ * and draws the result into the default framebuffer, so the back buffer holds
+ * the finished frame either way (the screenshot reads it from there).
+ */
 void renderer_end(Renderer *renderer);
+
+/*
+ * Turns bloom on or off from the next frame. Bloom needs the three bloom
+ * shaders (bloom_extract.frag, bloom_blur.frag and bloom_composite.frag, drawn
+ * with background.vert) and the offscreen buffers; when either is missing the
+ * frame is drawn straight to the screen as if bloom were off.
+ */
+void renderer_set_bloom(Renderer *renderer, bool enabled);
 
 /* Releases all GL objects. Safe to call twice. */
 void renderer_shutdown(Renderer *renderer);
