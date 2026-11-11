@@ -2,6 +2,8 @@
 
 A small falling-block puzzle game in C17 with SDL3, OpenGL 3.3 core and GLAD.
 
+See `ARCHITECTURE.md` for modules and design decisions, and `ROADMAP.md` for completed and planned milestones.
+
 **Milestone 1** is the skeleton only: a window, a GL context, an instanced quad
 renderer, a playfield view and a fixed-timestep loop.
 
