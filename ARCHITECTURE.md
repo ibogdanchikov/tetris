@@ -48,7 +48,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Shaders are loaded at runtime.** `renderer_init` reads `quad.vert`, `quad.frag`, `background.vert`, `background.frag` and the bloom passes `bloom_extract.frag`, `bloom_blur.frag` and `bloom_composite.frag` (drawn with `background.vert`, the full-screen triangle) from the shader directory. The default is `<SDL_GetBasePath()>/assets/shaders`; `--assets DIR` switches to `DIR/shaders`, and F5 calls `renderer_reload_shaders`. The quad program is required; the background and bloom programs are optional, and a failed reload keeps the previous program. The same files are also compiled into the executable: `cmake/embed_shaders.cmake` turns them into a generated `builtin_shaders.c`, and `builtin_shader_source` looks them up by file name. When there is no `--assets` and no `assets/shaders` directory next to the executable, `main.c` passes `NULL` to `renderer_init` and the renderer builds its programs from those copies. That is what lets the Linux release binary (`packaging/linux/build.sh`) be a single file.
 
-**Audio is synthesized at startup.** `src/audio/synth.c` renders every effect from a short note list into mono float buffers. `src/audio/audio.c` opens the default playback device with a mono float32 stream at 48 kHz, mixes up to `MIX_MAX_VOICES` (16) voices in the SDL callback, and soft-clips the sum. The app thread takes `SDL_LockAudioStream` around the voice list and the mute flag; the callback already holds that lock. A missing device is not fatal: it logs one warning, and every call that would produce sound becomes a no-op.
+**Audio is synthesized at startup.** `src/audio/synth.c` renders every effect from a short note list into mono float buffers, and the music as one 16-second loop whose notes wrap round the end of the buffer, so the loop has no seam. `src/audio/audio.c` opens the default playback device with a mono float32 stream at 48 kHz, mixes up to `MIX_MAX_VOICES` (16) voices in the SDL callback, adds the music from a `MixLoop` that lives outside that pool (so `audio_play` can never steal it and `audio_stop_all` leaves it playing), and soft-clips the sum. The music gain is the master fade times its own level from `audio_set_music_volume`, ramped per block like mute. The app thread takes `SDL_LockAudioStream` around the voice list and the mute flag; the callback already holds that lock. A missing device is not fatal: it logs one warning, and every call that would produce sound becomes a no-op.
 
 **Y is up everywhere.** Board row 0 is the bottom row. The renderer's pixel origin is the bottom-left corner of the framebuffer. Effect positions are board cells, so `fx_view` scales them with the layout. The SRS piece tables and the wall-kick tables use the same y-up convention; the tests pin the orientation with concrete cases and with a reversibility check.
 
@@ -168,7 +168,7 @@ MenuCommand menu_handle_key(Menu *menu, Settings *settings, MenuKey key);
 MenuCommand menu_bind_key(Menu *menu, Settings *settings, int scancode);
 ```
 
-`Settings` holds the volume and effects (0 to 10), bloom (0 or 1), DAS (1 to 30 ticks), ARR (0 to 10 ticks), the start level (1 to 15) and two key slots per `BindAction`. Keys are SDL scancodes stored as numbers; `save.h` names the ones it needs as USB HID usage IDs, and `input_sdl.c` checks each against `SDL_Scancode` with `_Static_assert`. Escape, P, M, R and F5 are reserved for the app and cannot be bound, and binding a key takes it out of every other slot. `save_parse` always leaves a valid `SaveData` and returns false only when the text is not a save file of a known version. `save_insert_score` keeps the table sorted, puts a tie below the earlier run, ignores a run that scored nothing, and returns the new place or -1.
+`Settings` holds the volume, music and effects (0 to 10), bloom (0 or 1), DAS (1 to 30 ticks), ARR (0 to 10 ticks), the start level (1 to 15) and two key slots per `BindAction`. Keys are SDL scancodes stored as numbers; `save.h` names the ones it needs as USB HID usage IDs, and `input_sdl.c` checks each against `SDL_Scancode` with `_Static_assert`. Escape, P, M, R and F5 are reserved for the app and cannot be bound, and binding a key takes it out of every other slot. `save_parse` always leaves a valid `SaveData` and returns false only when the text is not a save file of a known version. `save_insert_score` keeps the table sorted, puts a tie below the earlier run, ignores a run that scored nothing, and returns the new place or -1.
 
 `menu_handle_key` applies one menu key: up and down move the selection, left and right change a value row or the key slot, select acts on the row, back returns to the screen that opened the current one. `menu_bind_key` takes the key the controls screen is waiting for; Escape cancels it. `main.c` feeds both one SDL event at a time, so the Enter that opens the prompt is not taken as the key to bind.
 
@@ -239,11 +239,15 @@ bool audio_muted(const Audio *audio);
 void audio_set_volume(Audio *audio, float volume);
 void audio_shutdown(Audio *audio);
 
+void audio_set_music_volume(Audio *audio, float level);
+
 int sound_map_events(uint32_t events, const GameState *game, SoundRequest out[], int max);
 int synth_render(SoundId id, int sample_rate, float *out, int capacity);
+int synth_music_render(int sample_rate, float *out, int capacity);
+void mix_add_loop(MixLoop *loop, float gain_from, float gain_to, float *out, int frames);
 ```
 
-`audio_init` is the only place that opens the SDL audio device. `audio_set_volume` multiplies `AUDIO_MASTER_GAIN` by 0 to 1 and fades like mute; `main.c` squares the 0 to 10 setting so the low end is not one loudness. It returns false after logging a warning, and later calls that would produce sound become no-ops. `sound_map_events` turns event bits into at most `SOUND_MAP_MAX_REQUESTS` (8) requests and owns the precedence rules (a clear replaces the lock click, a hard drop replaces it too, game over suppresses the lock and clear sounds). `synth_render` is deterministic and SDL-free.
+`audio_init` is the only place that opens the SDL audio device. `audio_set_volume` multiplies `AUDIO_MASTER_GAIN` by 0 to 1 and fades like mute; `main.c` squares the 0 to 10 setting so the low end is not one loudness. It returns false after logging a warning, and later calls that would produce sound become no-ops. `synth_music_render` needs room for the whole loop (`synth_music_length`) and writes nothing otherwise. `mix_add_loop` adds the loop after `mix_voices` has written the effects, wraps at the end, and keeps moving at zero gain so muted music resumes in place. `sound_map_events` turns event bits into at most `SOUND_MAP_MAX_REQUESTS` (8) requests and owns the precedence rules (a clear replaces the lock click, a hard drop replaces it too, game over suppresses the lock and clear sounds). `synth_render` is deterministic and SDL-free.
 
 ### Platform
 

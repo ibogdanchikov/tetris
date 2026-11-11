@@ -351,6 +351,142 @@ static void test_sound_map_limits(void)
     CHECK_EQ_INT(sound_map_events(everything, NULL, NULL, SOUND_MAP_MAX_REQUESTS), 0);
 }
 
+/* --- music ---------------------------------------------------------------- */
+
+/* One loop at 48 kHz; the 44.1 kHz render is shorter and fits too. */
+#define TEST_MUSIC_FRAMES (48000 * 16)
+
+static float music_buffer[TEST_MUSIC_FRAMES];
+static float music_compare[TEST_MUSIC_FRAMES];
+
+static float audio_abs(float value)
+{
+    return value < 0.0f ? -value : value;
+}
+
+static void test_music_loop(void)
+{
+    /* 8 bars of 4 beats at 120 per minute: 16 seconds at any rate. */
+    CHECK_EQ_INT(synth_music_length(48000), 48000 * 16);
+    CHECK_EQ_INT(synth_music_length(44100), 44100 * 16);
+    CHECK_EQ_INT(synth_music_length(0), 0);
+
+    /* A loop is all or nothing. */
+    CHECK_EQ_INT(synth_music_render(48000, music_buffer, TEST_MUSIC_FRAMES - 1), 0);
+    CHECK_EQ_INT(synth_music_render(48000, NULL, TEST_MUSIC_FRAMES), 0);
+
+    const int rates[2] = { 48000, 44100 };
+    for (int r = 0; r < 2; ++r) {
+        const int length = synth_music_render(rates[r], music_buffer, TEST_MUSIC_FRAMES);
+        CHECK_EQ_INT(length, synth_music_length(rates[r]));
+        if (length <= 1) {
+            continue;
+        }
+
+        /* Finite, under its peak bound, and not silent. */
+        bool finite = true;
+        for (int i = 0; i < length; ++i) {
+            finite = finite && audio_finite(music_buffer[i]);
+        }
+        CHECK(finite);
+        const float peak = audio_peak(music_buffer, length);
+        CHECK(peak <= SYNTH_MUSIC_MAX_PEAK);
+        CHECK(peak > 0.1f);
+
+        /*
+         * Seamless: the step from the last sample back to the first is no bigger
+         * than the steps right around it. A loop that cut the notes still
+         * sounding at its end, and started the next pass without them, jumps
+         * here by a hundred times more.
+         */
+        float nearby = 0.0f;
+        for (int i = 0; i < 8; ++i) {
+            const float head = audio_abs(music_buffer[i + 1] - music_buffer[i]);
+            const float tail =
+                audio_abs(music_buffer[length - 1 - i] - music_buffer[length - 2 - i]);
+            nearby = head > nearby ? head : nearby;
+            nearby = tail > nearby ? tail : nearby;
+        }
+        const float seam = audio_abs(music_buffer[0] - music_buffer[length - 1]);
+        CHECK(seam <= 4.0f * nearby + 1e-6f);
+    }
+
+    /* Deterministic, like the effects. */
+    const int first = synth_music_render(48000, music_buffer, TEST_MUSIC_FRAMES);
+    const int second = synth_music_render(48000, music_compare, TEST_MUSIC_FRAMES);
+    CHECK_EQ_INT(first, second);
+    CHECK(memcmp(music_buffer, music_compare, (size_t)first * sizeof(float)) == 0);
+}
+
+static void test_mix_loop(void)
+{
+    static const float samples[5] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
+    float out[7];
+
+    /* It adds to what is already there and wraps round to the start. */
+    MixLoop loop = { samples, 5, 3 };
+    for (int i = 0; i < 7; ++i) {
+        out[i] = 10.0f;
+    }
+    mix_add_loop(&loop, 1.0f, 1.0f, out, 7);
+    static const float expected[7] = { 14.0f, 15.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f };
+    for (int i = 0; i < 7; ++i) {
+        CHECK(out[i] == expected[i]);
+    }
+    CHECK_EQ_INT(loop.position, 0);
+    CHECK(loop.samples == samples); /* a loop never runs out */
+
+    /* The gain ramps and lands exactly on gain_to on the last sample. */
+    memset(out, 0, sizeof out);
+    loop.position = 0;
+    mix_add_loop(&loop, 0.0f, 1.0f, out, 5);
+    CHECK(out[4] == 5.0f);
+    CHECK(out[0] > 0.0f && out[0] < 1.0f);
+
+    /* Muted (zero gain) it adds nothing but keeps its place. */
+    memset(out, 0, sizeof out);
+    loop.position = 1;
+    mix_add_loop(&loop, 0.0f, 0.0f, out, 7);
+    for (int i = 0; i < 7; ++i) {
+        CHECK(out[i] == 0.0f);
+    }
+    CHECK_EQ_INT(loop.position, 3);
+
+    /* No samples, no output buffer or no frames: nothing happens. */
+    MixLoop empty = { NULL, 0, 0 };
+    out[0] = 7.0f;
+    mix_add_loop(&empty, 1.0f, 1.0f, out, 7);
+    mix_add_loop(&loop, 1.0f, 1.0f, NULL, 7);
+    mix_add_loop(&loop, 1.0f, 1.0f, out, 0);
+    CHECK(out[0] == 7.0f);
+    CHECK_EQ_INT(loop.position, 3);
+}
+
+static void test_music_beside_a_full_pool(void)
+{
+    /* Every effect voice busy with a long sound, and the music on top: the
+       music takes no slot, so all of them keep playing. */
+    static float long_sound[4096];
+    for (int i = 0; i < 4096; ++i) {
+        long_sound[i] = 0.01f;
+    }
+    MixVoice voices[MIX_MAX_VOICES];
+    for (int v = 0; v < MIX_MAX_VOICES; ++v) {
+        voices[v] = (MixVoice){ long_sound, 4096, 0, 1.0f };
+    }
+    static const float music[3] = { 0.5f, -0.5f, 0.25f };
+    MixLoop loop = { music, 3, 0 };
+
+    float out[256];
+    for (int block = 0; block < 4; ++block) {
+        CHECK_EQ_INT(mix_voices(voices, MIX_MAX_VOICES, 1.0f, 1.0f, out, 256), MIX_MAX_VOICES);
+        mix_add_loop(&loop, 1.0f, 1.0f, out, 256);
+    }
+    CHECK_EQ_INT(loop.position, (4 * 256) % 3);
+    /* The last block holds sixteen effects plus the music sample. */
+    CHECK(audio_abs(out[255] - (0.16f + music[(4 * 256 - 1) % 3])) < 1e-5f);
+}
+
 void test_audio_suite(void)
 {
     test_synth_lengths();
@@ -362,6 +498,9 @@ void test_audio_suite(void)
     test_mix_two_voices_and_gain();
     test_mix_master_ramp();
     test_mix_soft_clip();
+    test_music_loop();
+    test_mix_loop();
+    test_music_beside_a_full_pool();
     test_sound_map_precedence();
     test_sound_map_limits();
 }

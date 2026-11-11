@@ -67,6 +67,32 @@ int mix_voices(MixVoice *voices, int voice_count, float master_from, float maste
     return active;
 }
 
+void mix_add_loop(MixLoop *loop, float gain_from, float gain_to, float *out, int frames)
+{
+    if (loop == NULL || loop->samples == NULL || loop->length <= 0 || out == NULL ||
+        frames <= 0) {
+        return;
+    }
+    if (loop->position < 0 || loop->position >= loop->length) {
+        loop->position = 0;
+    }
+
+    int position = loop->position;
+    if (gain_from != 0.0f || gain_to != 0.0f) {
+        const float step = (gain_to - gain_from) / (float)frames;
+        for (int i = 0; i < frames; ++i) {
+            /* +1 so the block ends exactly on gain_to, like the master ramp. */
+            out[i] += loop->samples[position] * (gain_from + step * (float)(i + 1));
+            if (++position == loop->length) {
+                position = 0;
+            }
+        }
+    } else {
+        position = (int)(((long long)position + frames) % loop->length);
+    }
+    loop->position = position;
+}
+
 float mix_soft_clip(float sample)
 {
     const float magnitude = sample < 0.0f ? -sample : sample;

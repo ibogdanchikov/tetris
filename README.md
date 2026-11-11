@@ -94,6 +94,11 @@ A big clear (four lines, a T-spin that clears lines, or a perfect clear) sends a
 neon shockwave ring out from the cleared rows; a perfect clear sends a second,
 wider one. Both follow the **EFFECTS** setting.
 
+**Milestone 7, part 4** adds music: an original 16-second loop synthesized at
+startup like the effects, with no audio files. It plays on a voice of its own,
+outside the effect pool, so effects never cut it off. **Settings > MUSIC** sets
+its level on top of **VOLUME**, and **M** mutes it with everything else.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -225,7 +230,8 @@ ignored and DAS/ARR produce the repeats. In the menus a held arrow repeats.
   **PLAY AGAIN** and **MAIN MENU**.
 - **High scores**: the top ten runs with their score, level and lines. The run
   that just ended is highlighted.
-- **Settings**: **VOLUME** (0 to 10), **EFFECTS** (0 to 10: particles, shake,
+- **Settings**: **VOLUME** (0 to 10), **MUSIC** (0 to 10, on top of the volume;
+  0 turns it off), **EFFECTS** (0 to 10: particles, shake,
   flashes, trails and the level-up pulse; 0 turns them off), **BLOOM** (on or
   off), **DAS** and **ARR** (shown in milliseconds; ARR 0 sends the piece
   straight to the wall) and **CONTROLS**. Changes take effect at once, also in a
@@ -246,6 +252,7 @@ honored). It is plain text: a `TETRIS SAVE` line, `version=1`, then one
 TETRIS SAVE
 version=1
 volume=7
+music=7
 effects=10
 bloom=1
 das=10
@@ -332,12 +339,24 @@ level up, a descending phrase for game over, and a two-tone blip for pause and
 resume. Soft drop is deliberately silent: it fires many times a second and has no
 sound of its own.
 
+The music is one loop of 8 bars at 120 beats per minute in A minor (Am F C G Am F
+Dm E): an octave bass in eighths, a soft sine pad, a quiet square arpeggio in
+sixteenths, a kick, a brushed snare and closed hats, and a lead melody written
+for this game. `synth_music_render` builds it from a chord per bar and a melody
+table, and writes it as a loop: the part of a note that runs past the end is
+added at the start, where it would sound on the next pass, so the end of the
+buffer runs straight into its start. It peaks at 0.51 and is about 3 MB at
+48 kHz.
+
 `src/audio/audio.c` is the only code that talks to SDL audio. It opens the
 default playback device with a mono float32 stream at 48 kHz — SDL converts to
 whatever the device wants — and mixes up to 16 voices from a callback on SDL's
 audio thread. Voices are stolen oldest-first when the pool is full, the sum is
 soft-clipped so a stack cannot pass full scale, and the mute change is faded over
-about 60 ms rather than stepping the volume. The app thread takes
+about 60 ms rather than stepping the volume. The music plays from a looping voice
+next to that pool, under the same master fade (so **VOLUME** and mute apply) times
+its own level from **MUSIC**, which fades the same way; it starts playing at
+launch, fades in, and keeps going through menus, pauses and restarts. The app thread takes
 `SDL_LockAudioStream` around the voice list and the mute flag; the callback
 already runs with that lock held, so one lock covers both threads.
 
@@ -452,7 +471,11 @@ and placement, that nothing spawns with the effects off, the lifetimes, the
 spark gravity, ring growth, and that neither pool grows past its capacity. The audio suite checks every effect's length, peak,
 finite samples, click-free ends and determinism, the short-capacity path, the
 mixer (silence, gains, voices ending mid-block, the soft clip, the master ramp)
-and the event-to-sound precedence. The save suite runs the save file parser and
+and the event-to-sound precedence, and that the music loop has the right length,
+stays under its peak, renders the same twice, steps from its last sample back to
+its first no more than around the seam, and plays beside a full effect pool
+without taking a slot; the looping mixer is checked for wrapping, its gain ramp
+and keeping its place while muted. The save suite runs the save file parser and
 serializer on strings: a round trip, missing, corrupt and unknown-version files,
 clamped and malformed values, key bindings and the score table. The scoring
 suite checks the T-spin rule corner by corner, a real T-spin double from a
@@ -619,7 +642,7 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
 
 ## Future work
 
-- Music and an audio-device picker.
+- An audio-device picker, and more than one music track.
 - Saving a run or recording a replay.
 - Real font rendering (a texture atlas) once the HUD needs more characters or
   smoother type; the rectangle font is deliberate for now.

@@ -1,5 +1,6 @@
 #include "audio/synth.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /*
@@ -261,9 +262,10 @@ static float synth_noise(uint32_t *state)
     return (float)(x >> 8) * (2.0f / 16777216.0f) - 1.0f;
 }
 
-static uint32_t synth_noise_seed(SoundId id, int note_index)
+/* `source` is the SoundId, or SOUND_COUNT for the music. */
+static uint32_t synth_noise_seed(int source, int note_index)
 {
-    const uint32_t seed = 0x9E3779B9u * ((uint32_t)id + 1u) +
+    const uint32_t seed = 0x9E3779B9u * ((uint32_t)source + 1u) +
                           0x85EBCA6Bu * ((uint32_t)note_index + 1u) + 0x632BE59Bu;
     return seed != 0 ? seed : 1u;
 }
@@ -295,9 +297,13 @@ static float synth_envelope(const SynthNote *note, float elapsed)
  * Renders one note and adds it to out. `written` is how much of the sound fits
  * in the caller's buffer; a note past that point is simply cut, which is what
  * makes a short buffer a true prefix of the full render.
+ *
+ * With `wrap` the buffer is a loop instead: the part of a note that runs past
+ * the end is added at the start, exactly where it would sound when the loop
+ * comes round again, so the end of the buffer joins its start without a seam.
  */
-static void synth_add_note(const SynthNote *note, int note_index, SoundId id, int sample_rate,
-                           float *out, int written)
+static void synth_add_note(const SynthNote *note, int note_index, int source, int sample_rate,
+                           float *out, int written, bool wrap)
 {
     int start = (int)(note->start * (float)sample_rate);
     int count = (int)(note->duration * (float)sample_rate);
@@ -312,13 +318,13 @@ static void synth_add_note(const SynthNote *note, int note_index, SoundId id, in
     }
 
     int end = start + count;
-    if (end > written) {
+    if (end > written && !wrap) {
         end = written;
     }
 
     float phase = 0.0f;
     float filtered = 0.0f;
-    uint32_t noise_state = synth_noise_seed(id, note_index);
+    uint32_t noise_state = synth_noise_seed(source, note_index);
 
     for (int i = start; i < end; ++i) {
         const int index = i - start;
@@ -350,7 +356,7 @@ static void synth_add_note(const SynthNote *note, int note_index, SoundId id, in
             filtered = sample;
         }
 
-        out[i] += sample * synth_envelope(note, elapsed) * note->volume;
+        out[wrap ? i % written : i] += sample * synth_envelope(note, elapsed) * note->volume;
 
         phase += hz / (float)sample_rate;
         if (phase >= 1.0f) {
@@ -406,9 +412,158 @@ int synth_render(SoundId id, int sample_rate, float *out, int capacity)
 
     const SynthSound *sound = &SOUNDS[id];
     for (int i = 0; i < sound->count; ++i) {
-        synth_add_note(&sound->notes[i], i, id, sample_rate, out, written);
+        synth_add_note(&sound->notes[i], i, (int)id, sample_rate, out, written, false);
     }
 
     synth_fade_edges(out, written, length, sample_rate);
     return written;
+}
+
+/* --- music ---------------------------------------------------------------- */
+
+/*
+ * The loop is generated from a chord per bar and a melody table rather than
+ * listed note by note: the bass, pad, arpeggio and drums follow the chords, so
+ * only the melody is written out. Frequencies are equal temperament, A4 = 440.
+ */
+#define MUSIC_BARS 8
+#define MUSIC_BEAT_SECONDS 0.5f /* 120 beats per minute */
+#define MUSIC_BAR_SECONDS (4.0f * MUSIC_BEAT_SECONDS)
+
+typedef struct MusicChord {
+    float bass;   /* root, in the octave a small speaker can still carry */
+    float pad[3]; /* the triad around middle C */
+    float arp[4]; /* chord tones an octave or two up, for the arpeggio */
+} MusicChord;
+
+#define MUSIC_AM { 110.00f, { 220.00f, 261.63f, 329.63f }, { 440.00f, 523.25f, 659.26f, 880.00f } }
+#define MUSIC_F { 87.31f, { 174.61f, 220.00f, 261.63f }, { 349.23f, 440.00f, 523.25f, 698.46f } }
+
+static const MusicChord MUSIC_CHORDS[MUSIC_BARS] = {
+    MUSIC_AM,
+    MUSIC_F,
+    /* C */ { 130.81f, { 196.00f, 261.63f, 329.63f }, { 392.00f, 523.25f, 659.26f, 783.99f } },
+    /* G */ { 98.00f, { 196.00f, 246.94f, 293.66f }, { 392.00f, 493.88f, 587.33f, 783.99f } },
+    MUSIC_AM,
+    MUSIC_F,
+    /* Dm */ { 146.83f, { 174.61f, 220.00f, 293.66f }, { 349.23f, 440.00f, 587.33f, 698.46f } },
+    /* E, the major dominant that leads back to Am at the top of the loop */
+    { 82.41f, { 164.81f, 207.65f, 246.94f }, { 329.63f, 415.30f, 493.88f, 659.26f } },
+};
+
+typedef struct MusicMelodyNote {
+    int bar;
+    float beat;  /* start within the bar */
+    float beats; /* length */
+    float hz;
+} MusicMelodyNote;
+
+/* A call in bars 1-4 and an answer in bars 5-8 that turns towards E. */
+static const MusicMelodyNote MUSIC_MELODY[] = {
+    { 0, 0.0f, 1.0f, 659.26f }, { 0, 1.0f, 0.5f, 783.99f }, { 0, 1.5f, 0.5f, 659.26f },
+    { 0, 2.0f, 1.0f, 587.33f }, { 0, 3.0f, 1.0f, 523.25f },
+    { 1, 0.0f, 2.0f, 698.46f }, { 1, 2.0f, 1.0f, 659.26f }, { 1, 3.0f, 1.0f, 523.25f },
+    { 2, 0.0f, 1.0f, 783.99f }, { 2, 1.0f, 0.5f, 659.26f }, { 2, 1.5f, 0.5f, 783.99f },
+    { 2, 2.0f, 1.0f, 1046.50f }, { 2, 3.0f, 1.0f, 783.99f },
+    { 3, 0.0f, 3.0f, 587.33f }, { 3, 3.0f, 1.0f, 493.88f },
+    { 4, 0.0f, 1.0f, 659.26f }, { 4, 1.0f, 0.5f, 783.99f }, { 4, 1.5f, 0.5f, 659.26f },
+    { 4, 2.0f, 1.0f, 587.33f }, { 4, 3.0f, 1.0f, 523.25f },
+    { 5, 0.0f, 2.0f, 880.00f }, { 5, 2.0f, 1.0f, 783.99f }, { 5, 3.0f, 1.0f, 698.46f },
+    { 6, 0.0f, 1.0f, 698.46f }, { 6, 1.0f, 0.5f, 659.26f }, { 6, 1.5f, 0.5f, 587.33f },
+    { 6, 2.0f, 1.0f, 659.26f }, { 6, 3.0f, 1.0f, 698.46f },
+    { 7, 0.0f, 2.0f, 659.26f }, { 7, 2.0f, 1.0f, 493.88f }, { 7, 3.0f, 1.0f, 415.30f },
+};
+
+/* Arpeggio order over the four chord tones, one step per sixteenth. */
+static const int MUSIC_ARP_STEPS[8] = { 0, 1, 2, 3, 2, 1, 2, 3 };
+
+int synth_music_length(int sample_rate)
+{
+    if (sample_rate <= 0) {
+        return 0;
+    }
+    return (int)(SYNTH_MUSIC_SECONDS * (float)sample_rate);
+}
+
+/* Adds one generated note to the loop; `index` numbers the notes for the noise seeds. */
+static void music_add(SynthNote note, int *index, int sample_rate, float *out, int length)
+{
+    synth_add_note(&note, *index, (int)SOUND_COUNT, sample_rate, out, length, true);
+    ++*index;
+}
+
+int synth_music_render(int sample_rate, float *out, int capacity)
+{
+    const int length = synth_music_length(sample_rate);
+    if (out == NULL || length <= 0 || capacity < length) {
+        return 0;
+    }
+    for (int i = 0; i < length; ++i) {
+        out[i] = 0.0f;
+    }
+
+    int index = 0;
+    for (int bar = 0; bar < MUSIC_BARS; ++bar) {
+        const MusicChord *chord = &MUSIC_CHORDS[bar];
+        const float bar_start = (float)bar * MUSIC_BAR_SECONDS;
+
+        /* Pad: the triad held through the bar and a little into the next, so
+           the chords overlap instead of stopping between bars. */
+        for (int tone = 0; tone < 3; ++tone) {
+            const SynthNote pad = NOTE(bar_start, MUSIC_BAR_SECONDS + 0.25f, chord->pad[tone],
+                                       chord->pad[tone], 0.035f, 0.12f, 0.30f, 0.25f,
+                                       SYNTH_WAVE_SINE);
+            music_add(pad, &index, sample_rate, out, length);
+        }
+
+        /* Bass: eighth notes jumping between the root and its octave. */
+        for (int step = 0; step < 8; ++step) {
+            const float hz = step % 2 == 0 ? chord->bass : chord->bass * 2.0f;
+            const float volume = step % 2 == 0 ? 0.13f : 0.09f;
+            const SynthNote bass = NOTE(bar_start + (float)step * 0.25f, 0.22f, hz, hz, volume,
+                                        0.005f, 0.08f, 0.35f, SYNTH_WAVE_TRIANGLE);
+            music_add(bass, &index, sample_rate, out, length);
+        }
+
+        /* Arpeggio: quiet sixteenths over the chord tones. */
+        for (int step = 0; step < 16; ++step) {
+            const float hz = chord->arp[MUSIC_ARP_STEPS[step % 8]];
+            const SynthNote arp = NOTE(bar_start + (float)step * 0.125f, 0.11f, hz, hz, 0.026f,
+                                       0.004f, 0.07f, 0.45f, SYNTH_WAVE_SQUARE);
+            music_add(arp, &index, sample_rate, out, length);
+        }
+
+        /* Drums: a soft kick on beats 1 and 3, a brushed snare on 2 and 4,
+           and a closed hat on every off-beat. */
+        for (int beat = 0; beat < 4; ++beat) {
+            const float t = bar_start + (float)beat * MUSIC_BEAT_SECONDS;
+            if (beat % 2 == 0) {
+                const SynthNote kick = NOTE(t, 0.16f, 120.0f, 45.0f, 0.20f, 0.002f, 0.12f, 0.40f,
+                                            SYNTH_WAVE_SINE);
+                music_add(kick, &index, sample_rate, out, length);
+            } else {
+                const SynthNote snare = NOTE(t, 0.10f, 0.0f, 0.0f, 0.045f, 0.002f, 0.08f, 0.55f,
+                                             SYNTH_WAVE_NOISE);
+                music_add(snare, &index, sample_rate, out, length);
+            }
+            const SynthNote hat = NOTE(t + 0.25f, 0.035f, 0.0f, 0.0f, 0.02f, 0.001f, 0.03f, 0.0f,
+                                       SYNTH_WAVE_NOISE);
+            music_add(hat, &index, sample_rate, out, length);
+        }
+    }
+
+    /* Lead: each note a touch shorter than its slot, so repeated pitches
+       separate. */
+    for (size_t i = 0; i < sizeof MUSIC_MELODY / sizeof MUSIC_MELODY[0]; ++i) {
+        const MusicMelodyNote *melody = &MUSIC_MELODY[i];
+        const float start = (float)melody->bar * MUSIC_BAR_SECONDS +
+                            melody->beat * MUSIC_BEAT_SECONDS;
+        const float duration = melody->beats * MUSIC_BEAT_SECONDS - 0.03f;
+        const float release = duration * 0.5f < 0.12f ? duration * 0.5f : 0.12f;
+        const SynthNote lead = NOTE(start, duration, melody->hz, melody->hz, 0.075f, 0.01f,
+                                    release, 0.50f, SYNTH_WAVE_SQUARE);
+        music_add(lead, &index, sample_rate, out, length);
+    }
+
+    return length;
 }

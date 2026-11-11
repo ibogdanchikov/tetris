@@ -17,8 +17,8 @@ static const MenuItem MENU_GAME_OVER_ITEMS[] = {
 };
 
 static const MenuItem MENU_SETTINGS_ITEMS[] = {
-    MENU_ITEM_VOLUME, MENU_ITEM_EFFECTS,  MENU_ITEM_BLOOM, MENU_ITEM_DAS,
-    MENU_ITEM_ARR,    MENU_ITEM_CONTROLS, MENU_ITEM_BACK,
+    MENU_ITEM_VOLUME, MENU_ITEM_MUSIC, MENU_ITEM_EFFECTS,  MENU_ITEM_BLOOM,
+    MENU_ITEM_DAS,    MENU_ITEM_ARR,   MENU_ITEM_CONTROLS, MENU_ITEM_BACK,
 };
 
 static const MenuItem MENU_CONTROLS_ITEMS[] = {
@@ -140,6 +140,8 @@ const char *menu_item_label(MenuItem item)
         return "PLAY AGAIN";
     case MENU_ITEM_VOLUME:
         return "VOLUME";
+    case MENU_ITEM_MUSIC:
+        return "MUSIC";
     case MENU_ITEM_EFFECTS:
         return "EFFECTS";
     case MENU_ITEM_BLOOM:
@@ -172,6 +174,10 @@ static int *menu_item_setting(MenuItem item, Settings *settings, int *out_min, i
         *out_min = 0;
         *out_max = SETTINGS_VOLUME_MAX;
         return &settings->volume;
+    case MENU_ITEM_MUSIC:
+        *out_min = 0;
+        *out_max = SETTINGS_MUSIC_MAX;
+        return &settings->music;
     case MENU_ITEM_EFFECTS:
         *out_min = 0;
         *out_max = SETTINGS_EFFECTS_MAX;
@@ -223,6 +229,13 @@ void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t 
             snprintf(out, size, "OFF");
         } else {
             snprintf(out, size, "%d", settings->volume);
+        }
+        break;
+    case MENU_ITEM_MUSIC:
+        if (settings->music == 0) {
+            snprintf(out, size, "OFF");
+        } else {
+            snprintf(out, size, "%d", settings->music);
         }
         break;
     case MENU_ITEM_EFFECTS:

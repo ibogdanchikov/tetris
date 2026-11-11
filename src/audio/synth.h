@@ -54,6 +54,26 @@ const char *synth_name(SoundId id);
 int synth_length(SoundId id, int sample_rate);
 
 /*
+ * The background music: one seamless loop, 8 bars at 120 beats per minute in A
+ * minor (Am F C G Am F Dm E), with an octave bass, a soft pad, a quiet
+ * arpeggio, light drums and a lead melody. It is rendered as a loop: the end of
+ * the buffer runs straight into its start, so playing it over and over never
+ * clicks.
+ */
+#define SYNTH_MUSIC_SECONDS 16.0f
+#define SYNTH_MUSIC_MAX_PEAK 0.6f
+
+/* Frames in the music loop at this sample rate, or 0 for a non-positive rate. */
+int synth_music_length(int sample_rate);
+
+/*
+ * Renders the music loop into out and returns its length in frames. A loop
+ * cannot be cut short, so a capacity below synth_music_length writes nothing
+ * and returns 0, as does out == NULL. Deterministic, like the effects.
+ */
+int synth_music_render(int sample_rate, float *out, int capacity);
+
+/*
  * Renders the sound into out as mono float samples and returns how many frames
  * were written: the smaller of synth_length and capacity. If the capacity is
  * short of the full length the buffer holds the beginning of the sound, exactly

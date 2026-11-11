@@ -269,8 +269,8 @@ static GameConfig app_game_config(const Settings *settings)
 }
 
 /*
- * Pushes the settings into the parts that use them. The volume steps are
- * squared, so the low end of the scale is not all one loudness. DAS and ARR
+ * Pushes the settings into the parts that use them. The volume and music steps
+ * are squared, so the low end of the scale is not all one loudness. DAS and ARR
  * also reach the run in progress, so a change made from the pause menu is felt
  * right away.
  */
@@ -279,6 +279,8 @@ static void app_apply_settings(App *app)
     const Settings *settings = &app->save.settings;
     const float volume = (float)settings->volume / (float)SETTINGS_VOLUME_MAX;
     audio_set_volume(&app->audio, volume * volume);
+    const float music = (float)settings->music / (float)SETTINGS_MUSIC_MAX;
+    audio_set_music_volume(&app->audio, music * music);
     fx_set_intensity(&app->fx, (float)settings->effects / (float)SETTINGS_EFFECTS_MAX);
     renderer_set_bloom(&app->renderer, settings->bloom != 0);
     game_set_shift_timing(&app->game, (uint16_t)settings->das_ticks,

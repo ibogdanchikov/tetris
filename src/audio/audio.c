@@ -65,6 +65,20 @@ static void SDLCALL audio_mix_callback(void *userdata, SDL_AudioStream *stream,
         }
 
         mix_voices(audio->voices, MIX_MAX_VOICES, from, to, audio->scratch, chunk);
+
+        /* The music on its own voice, under the same master ramp (so mute and
+           the volume fade it too) times its own level, which ramps the same way. */
+        const float music_from = audio->music_gain;
+        float music_to = audio->music_level;
+        if (music_to - music_from > AUDIO_GAIN_STEP) {
+            music_to = music_from + AUDIO_GAIN_STEP;
+        } else if (music_from - music_to > AUDIO_GAIN_STEP) {
+            music_to = music_from - AUDIO_GAIN_STEP;
+        }
+        mix_add_loop(&audio->music_voice, from * music_from * AUDIO_MUSIC_GAIN,
+                     to * music_to * AUDIO_MUSIC_GAIN, audio->scratch, chunk);
+        audio->music_gain = music_to;
+
         mix_clip(audio->scratch, chunk);
         audio->master_gain = to;
 
@@ -98,6 +112,7 @@ bool audio_init(Audio *audio)
     memset(audio, 0, sizeof *audio);
     audio->master_gain = AUDIO_MASTER_GAIN;
     audio->volume = 1.0f;
+    audio->music_level = 1.0f;
 
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "audio disabled: SDL_InitSubSystem: %s",
@@ -142,6 +157,18 @@ bool audio_init(Audio *audio)
         }
         audio->sounds[id] = samples;
         audio->sound_lengths[id] = synth_render((SoundId)id, AUDIO_SAMPLE_RATE, samples, length);
+    }
+
+    /* The music is optional: without memory for it the effects still play. */
+    const int music_length = synth_music_length(AUDIO_SAMPLE_RATE);
+    audio->music = malloc((size_t)music_length * sizeof(float));
+    if (audio->music == NULL) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "audio: out of memory for the music; no music");
+    } else {
+        audio->music_voice.samples = audio->music;
+        audio->music_voice.length =
+            synth_music_render(AUDIO_SAMPLE_RATE, audio->music, music_length);
+        audio->music_voice.position = 0;
     }
 
     /* The callback may start as soon as the stream is resumed, so everything it
@@ -234,6 +261,27 @@ bool audio_muted(const Audio *audio)
     return audio != NULL && audio->muted;
 }
 
+void audio_set_music_volume(Audio *audio, float level)
+{
+    if (audio == NULL) {
+        return;
+    }
+    if (!(level > 0.0f)) {
+        level = 0.0f;
+    } else if (level > 1.0f) {
+        level = 1.0f;
+    }
+    if (!audio->ready) {
+        audio->music_level = level;
+        return;
+    }
+    if (!SDL_LockAudioStream(audio->stream)) {
+        return;
+    }
+    audio->music_level = level;
+    SDL_UnlockAudioStream(audio->stream);
+}
+
 void audio_set_volume(Audio *audio, float volume)
 {
     if (audio == NULL) {
@@ -279,6 +327,10 @@ void audio_shutdown(Audio *audio)
     free(audio->scratch);
     audio->scratch = NULL;
     audio->scratch_frames = 0;
+    free(audio->music);
+    audio->music = NULL;
+    audio->music_voice.samples = NULL;
+    audio->music_voice.length = 0;
 
     if (audio->subsystem) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);

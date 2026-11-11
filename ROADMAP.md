@@ -77,6 +77,13 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Both follow the effects intensity.
 - `tests/test_fx.c` covers their spawn counts and placement, nothing with the effects off, lifetimes, spark gravity, ring growth and both pool bounds.
 
+### Milestone 7, part 4: "Add music"
+
+- An original 16-second loop, 8 bars at 120 BPM in A minor, synthesized at startup by `synth_music_render` from a chord per bar and a melody table. Notes that run past the end are written at the start, so the loop has no seam.
+- `MixLoop` and `mix_add_loop`: a looping voice outside the effect pool, so effects never steal it and restarts do not stop it. It plays under the master fade, so the volume and mute apply.
+- A **MUSIC** setting (0 to 10, default 7) on top of the volume, faded per block like mute.
+- Tests for the loop's length, peak, determinism and seam, the looping mixer, and the music beside a full effect pool.
+
 ## Current status
 
 ### What works
@@ -86,6 +93,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - After a clear, the rows above fall into place instead of jumping.
 - Bloom over the whole picture, switchable in the settings.
 - Hard-drop sparks and shockwave rings for big clears.
+- Background music on its own voice, with its own level.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
 - A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
@@ -110,7 +118,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Sparks and rings in a real game. They were drawn from a scratch build that fed a hard drop and a perfect four-line clear into the fx layer and captured them at about 30, 60, 100 and 175 ms; the first sparks were too faint and were made larger and brighter after that.
 - The row drop at full speed in a real game. Its offsets were checked with a throwaway program (clears of rows 0-1, 2, 1 and 3, and 0-3, plus a lock in the same frame) and drawn from a scratch build pinned at the start, middle and end of the fall, but not watched in motion.
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
-- How the sounds actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here.
+- How the sounds and the music actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here. The music was checked by analysis instead: a throwaway program measured a seam step of 0.00005 against 0.064 for the largest step inside the loop, a peak of 0.51, no DC offset and even loudness across the eight bars, and an ffmpeg spectrogram showed the melody, arpeggio, bass and drums where they were written. The seam test was checked against a render that cut the notes at the end, which it fails. The sanitizer build ran 240 frames with the music mixing through SDL's dummy audio driver without a report. Its level against the effects (`AUDIO_MUSIC_GAIN` 0.5, MUSIC 7 by default) is a guess until someone listens.
 - Windows and macOS builds.
 - Live window resize by dragging. The layout is recomputed from the drawable size every frame, but that path has only been exercised through the screenshot size and unit tests.
 - Long sessions, high-DPI displays, multiple monitors and audio device changes at runtime.
@@ -118,7 +126,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 ### Known limitations
 
 - No text beyond the built-in 5x7 font. It covers space, A-Z, 0-9 and `: . - ! ? < >`; lowercase uses the uppercase glyph and other characters are skipped, so a key name such as `[` shows as a gap on the controls screen.
-- No music. Mute (`M`) is not saved; only the volume is.
+- One music track, looping the whole time, the same in menus and in play. Mute (`M`) is not saved; only the volume and the music level are.
 - No player names in the score table, and no way to clear it short of deleting `save.txt`.
 - No gamepad, replay or CI. Only Linux is packaged, as a single x86_64 binary built by `packaging/linux/build.sh` and released by `.github/workflows/release.yml`.
 
@@ -138,23 +146,20 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ### Milestone 7: presentation polish
 
-**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation (part 1), bloom (part 2) and the new particle types (part 3) are done; the rest is below.
+**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation (part 1), bloom (part 2), the new particle types (part 3) and music (part 4) are done; the atlas font is what is left.
 
 **Scope**
 
 - Real font rendering from a texture atlas.
-- Music.
 
 **Design notes**
 
 - The current renderer has no texture support. A font atlas needs a textured quad path, or a second small pipeline; it is not a drop-in replacement for `text_draw`. Pick either a checked-in atlas or a small vendored TrueType rasterizer, and keep the current pixel font as a fallback.
-- Music needs a voice that the sound-effect pool cannot steal, plus its own volume. The existing mixer has one fixed pool, so either reserve a voice or add a second stream.
 - Keep every new effect optional or cheap enough to run on Mesa llvmpipe, which the README lists as a supported fallback.
 
 **Done when**
 
 - Text renders at arbitrary sizes from an atlas, and the HUD remains readable at the minimum supported window size.
-- Music loops without clicks, can be muted, and does not steal sound-effect voices.
 
 ## Later / ideas
 

@@ -15,6 +15,7 @@
  *     TETRIS SAVE
  *     version=1
  *     volume=10
+ *     music=7
  *     effects=10
  *     bloom=1
  *     das=10
@@ -43,6 +44,8 @@
 
 /* Ranges the settings are clamped to. */
 #define SETTINGS_VOLUME_MAX 10 /* 0 = silent, 10 = the full mix */
+#define SETTINGS_MUSIC_MAX 10  /* 0 = no music, on top of the volume */
+#define SETTINGS_MUSIC_DEFAULT 7
 #define SETTINGS_EFFECTS_MAX 10 /* 0 = no particles, shake or flashes, 10 = all of them */
 #define SETTINGS_DAS_MIN 1      /* ticks */
 #define SETTINGS_DAS_MAX 30
@@ -92,6 +95,7 @@ typedef enum BindAction {
 
 typedef struct Settings {
     int volume;      /* 0..SETTINGS_VOLUME_MAX */
+    int music;       /* 0..SETTINGS_MUSIC_MAX */
     int effects;     /* 0..SETTINGS_EFFECTS_MAX */
     int bloom;       /* 0 = off, 1 = on */
     int das_ticks;   /* SETTINGS_DAS_MIN..SETTINGS_DAS_MAX */
@@ -114,8 +118,8 @@ typedef struct SaveData {
     int score_count;
 } SaveData;
 
-/* Full volume and effects, bloom on, the core's DAS and ARR, level 1 and the
-   default keys. */
+/* Full volume and effects, music at SETTINGS_MUSIC_DEFAULT, bloom on, the
+   core's DAS and ARR, level 1 and the default keys. */
 void settings_defaults(Settings *settings);
 
 /* Default settings and an empty score table. */
