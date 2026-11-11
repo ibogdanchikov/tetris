@@ -70,6 +70,13 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - A **BLOOM** setting (on by default), saved as `bloom=` in the save file; the existing round-trip test covers it.
 - Without the shaders or with incomplete framebuffers the game logs once and draws without bloom.
 
+### Milestone 7, part 3: "Add hard-drop sparks and shockwave rings"
+
+- Particles get a kind. `FX_PARTICLE_SPARK` comes from the bottom cells of a hard-dropped piece (`FX_SPARKS_PER_CELL` each), faster for longer drops, under stronger gravity, and is drawn as a short streak pushed towards white.
+- `FxRing` shockwaves come from big clears (four lines, a T-spin with lines, a perfect clear, which gets a second wider ring), in their own pool of `FX_MAX_RINGS`, drawn as a growing neon circle.
+- Both follow the effects intensity.
+- `tests/test_fx.c` covers their spawn counts and placement, nothing with the effects off, lifetimes, spark gravity, ring growth and both pool bounds.
+
 ## Current status
 
 ### What works
@@ -78,6 +85,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - T-spins and mini T-spins, back-to-back bonuses, combos and perfect clears, with a fading label that names each notable clear.
 - After a clear, the rows above fall into place instead of jumping.
 - Bloom over the whole picture, switchable in the settings.
+- Hard-drop sparks and shockwave rings for big clears.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
 - A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
@@ -99,6 +107,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - A T-spin, a perfect clear or a combo made in a real game by a person. The rules are unit tested and the label was drawn on screen, but nobody has played one here.
 - Bloom was captured on and off, with three threshold and strength pairs and two buffer sizes compared side by side before picking 0.75 and 1.2 at a quarter of the size. The single-file release binary built bloom from its built-in shaders. Frame times from a throwaway build that timed frames 30 to 150: with llvmpipe, 18.6 ms off and 25.5 to 27.0 ms on at 800x600, 39 ms off and 57 ms on at 1920x1080. On the Iris Xe both stayed at the 16.7 ms vsync interval at 1920x1080 (vsync could not be turned off on Wayland, so the true GPU cost is not known).
 - Window resizing with bloom on. The buffers are rebuilt on every size change, and every run here started at a new size, but nobody has dragged a window edge.
+- Sparks and rings in a real game. They were drawn from a scratch build that fed a hard drop and a perfect four-line clear into the fx layer and captured them at about 30, 60, 100 and 175 ms; the first sparks were too faint and were made larger and brighter after that.
 - The row drop at full speed in a real game. Its offsets were checked with a throwaway program (clears of rows 0-1, 2, 1 and 3, and 0-3, plus a lock in the same frame) and drawn from a scratch build pinned at the start, middle and end of the fall, but not watched in motion.
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here.
@@ -129,12 +138,11 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ### Milestone 7: presentation polish
 
-**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation (part 1) and bloom (part 2) are done; the rest is below.
+**Goal:** make the game look and sound finished without changing the simulation. The row-drop animation (part 1), bloom (part 2) and the new particle types (part 3) are done; the rest is below.
 
 **Scope**
 
 - Real font rendering from a texture atlas.
-- More particle types.
 - Music.
 
 **Design notes**
@@ -146,7 +154,6 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 **Done when**
 
 - Text renders at arbitrary sizes from an atlas, and the HUD remains readable at the minimum supported window size.
-- At least two new particle types are in use and tested for lifetime and pool bounds.
 - Music loops without clicks, can be muted, and does not steal sound-effect voices.
 
 ## Later / ideas

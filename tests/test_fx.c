@@ -401,6 +401,266 @@ static void test_fx_hard_drop_edges(void)
     CHECK(fx_near(fx.shake.amplitude, FX_SHAKE_MAX, 1e-6f));
 }
 
+/* --- sparks -------------------------------------------------------------- */
+
+static int fx_count_kind(const Fx *fx, FxParticleKind kind)
+{
+    int count = 0;
+    for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
+        if (fx->particles[i].life > 0.0f && fx->particles[i].kind == kind) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/* A hard drop of `type` in spawn rotation from row 15 down to row 0 at x 3. */
+static void fx_make_hard_drop(GameState *game, PieceType type, int rows)
+{
+    game->last_hard_drop_from = (ActivePiece){ type, 0, 3, (int8_t)rows };
+    game->last_locked = (ActivePiece){ type, 0, 3, 0 };
+    game->last_hard_drop_rows = (uint8_t)rows;
+}
+
+static void test_fx_hard_drop_sparks(void)
+{
+    Fx fx;
+    GameState game;
+    game_init(&game, 21);
+
+    /* A flat T has three bottom cells (the top cell sits on the middle one),
+       an O two, and each throws FX_SPARKS_PER_CELL sparks in the piece color. */
+    fx_init(&fx, 22);
+    fx_make_hard_drop(&game, PIECE_T, 15);
+    fx_on_events(&fx, GAME_EVENT_HARD_DROP, &game);
+    CHECK_EQ_INT(fx_count_kind(&fx, FX_PARTICLE_SPARK), 3 * FX_SPARKS_PER_CELL);
+    CHECK_EQ_INT(fx_count_kind(&fx, FX_PARTICLE_GLOW), 0);
+
+    int xs[4];
+    int ys[4];
+    game_piece_cells(&game.last_locked, xs, ys);
+    int lowest = ys[0];
+    for (int i = 1; i < 4; ++i) {
+        lowest = ys[i] < lowest ? ys[i] : lowest;
+    }
+    const float bottom = (float)lowest;
+    for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
+        const FxParticle *spark = &fx.particles[i];
+        if (spark->life <= 0.0f) {
+            continue;
+        }
+        CHECK_EQ_INT(spark->color, CELL_T);
+        CHECK(spark->life >= FX_SPARK_LIFE_MIN && spark->life <= FX_SPARK_LIFE_MAX);
+        CHECK(spark->vy > 0.0f); /* thrown up */
+        CHECK(spark->x >= 3.0f && spark->x <= 6.0f);
+        CHECK(spark->y >= bottom && spark->y < bottom + 0.5f);
+    }
+
+    fx_init(&fx, 22);
+    fx_make_hard_drop(&game, PIECE_O, 15);
+    fx_on_events(&fx, GAME_EVENT_HARD_DROP, &game);
+    CHECK_EQ_INT(fx_count_kind(&fx, FX_PARTICLE_SPARK), 2 * FX_SPARKS_PER_CELL);
+
+    /* No sparks from a piece that was already resting, or with the effects off. */
+    fx_init(&fx, 22);
+    fx_make_hard_drop(&game, PIECE_O, 0);
+    fx_on_events(&fx, GAME_EVENT_HARD_DROP, &game);
+    CHECK_EQ_INT(fx_particle_count(&fx), 0);
+    fx_init(&fx, 22);
+    fx_set_intensity(&fx, 0.0f);
+    fx_make_hard_drop(&game, PIECE_O, 15);
+    fx_on_events(&fx, GAME_EVENT_HARD_DROP, &game);
+    CHECK_EQ_INT(fx_particle_count(&fx), 0);
+
+    /* A short drop throws them slower than a long one. */
+    Fx slow;
+    Fx fast;
+    fx_init(&slow, 23);
+    fx_init(&fast, 23);
+    fx_make_hard_drop(&game, PIECE_O, 1);
+    fx_on_events(&slow, GAME_EVENT_HARD_DROP, &game);
+    fx_make_hard_drop(&game, PIECE_O, FX_SPARK_FULL_SPEED_ROWS);
+    fx_on_events(&fast, GAME_EVENT_HARD_DROP, &game);
+    for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
+        if (slow.particles[i].life > 0.0f) {
+            CHECK(slow.particles[i].vy < fast.particles[i].vy);
+        }
+    }
+}
+
+static void test_fx_sparks_expire_and_fall(void)
+{
+    Fx fx;
+    GameState game;
+    game_init(&game, 24);
+    fx_init(&fx, 25);
+    fx_make_hard_drop(&game, PIECE_I, 12);
+    fx_on_events(&fx, GAME_EVENT_HARD_DROP, &game);
+    CHECK_EQ_INT(fx_count_kind(&fx, FX_PARTICLE_SPARK), 4 * FX_SPARKS_PER_CELL);
+
+    /* Spark gravity is stronger than the glow particles': after a tenth of a
+       second every spark is already slower upward than it started. */
+    float start_vy[FX_MAX_PARTICLES];
+    for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
+        start_vy[i] = fx.particles[i].vy;
+    }
+    for (int step = 0; step < 6; ++step) {
+        fx_update(&fx, 1.0f / 60.0f);
+    }
+    for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
+        if (fx.particles[i].life > 0.0f) {
+            CHECK(fx.particles[i].vy < start_vy[i] + FX_SPARK_GRAVITY * 0.05f);
+        }
+    }
+
+    /* None outlives FX_SPARK_LIFE_MAX. */
+    const int steps = (int)(FX_SPARK_LIFE_MAX * 60.0f) + 2;
+    for (int step = 0; step < steps; ++step) {
+        fx_update(&fx, 1.0f / 60.0f);
+    }
+    CHECK_EQ_INT(fx_particle_count(&fx), 0);
+}
+
+static void test_fx_spark_pool_bound(void)
+{
+    Fx fx;
+    GameState game;
+    game_init(&game, 26);
+    fx_init(&fx, 27);
+    fx_make_hard_drop(&game, PIECE_I, 12);
+
+    /* Sparks share the particle pool: it never grows past its capacity, and
+       spawns beyond it are dropped and counted. */
+    for (int i = 0; i < 200; ++i) {
+        fx_on_events(&fx, GAME_EVENT_HARD_DROP, &game);
+        CHECK(fx_particle_count(&fx) <= FX_MAX_PARTICLES);
+    }
+    CHECK_EQ_INT(fx_particle_count(&fx), FX_MAX_PARTICLES);
+    CHECK_EQ_INT(fx_count_kind(&fx, FX_PARTICLE_SPARK), FX_MAX_PARTICLES);
+    CHECK(fx.particles_dropped > 0);
+}
+
+/* --- shockwave rings ----------------------------------------------------- */
+
+/* A clearing lock of `lines` rows from the bottom, scored as `clear`. */
+static void fx_make_big_clear(GameState *game, int lines, GameTSpin tspin, bool perfect)
+{
+    fx_make_line_clear(game, lines);
+    memset(&game->last_clear, 0, sizeof game->last_clear);
+    game->last_clear.lines = (uint8_t)lines;
+    game->last_clear.tspin = (uint8_t)tspin;
+    game->last_clear.perfect_clear = perfect;
+    game->last_locked = (ActivePiece){ tspin != GAME_TSPIN_NONE ? PIECE_T : PIECE_I, 1, 8, 0 };
+}
+
+static void test_fx_clear_rings(void)
+{
+    Fx fx;
+    GameState game;
+    game_init(&game, 28);
+
+    /* A plain single, double or triple has no ring. */
+    for (int lines = 1; lines <= 3; ++lines) {
+        fx_init(&fx, 29);
+        fx_make_big_clear(&game, lines, GAME_TSPIN_NONE, false);
+        fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+        CHECK_EQ_INT(fx_ring_count(&fx), 0);
+    }
+
+    /* Four lines: one ring in the I's color, centered across the rows. */
+    fx_init(&fx, 29);
+    fx_make_big_clear(&game, 4, GAME_TSPIN_NONE, false);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+    CHECK_EQ_INT(fx_ring_count(&fx), 1);
+    for (int i = 0; i < FX_MAX_RINGS; ++i) {
+        const FxRing *ring = &fx.rings[i];
+        if (ring->life <= 0.0f) {
+            continue;
+        }
+        CHECK(fx_near(ring->x, (float)BOARD_WIDTH * 0.5f, 1e-5f));
+        CHECK(fx_near(ring->y, 2.0f, 1e-5f)); /* rows 0-3: centers 0.5 .. 3.5 */
+        CHECK(fx_near(ring->radius, FX_RING_RADIUS, 1e-5f));
+        CHECK_EQ_INT(ring->color, CELL_I);
+        CHECK(fx_near(fx_ring_current_radius(ring), 0.0f, 1e-5f));
+    }
+
+    /* A T-spin single gets one, a perfect clear two, the second wider. */
+    fx_init(&fx, 29);
+    fx_make_big_clear(&game, 1, GAME_TSPIN_FULL, false);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+    CHECK_EQ_INT(fx_ring_count(&fx), 1);
+    fx_init(&fx, 29);
+    fx_make_big_clear(&game, 2, GAME_TSPIN_NONE, true);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+    CHECK_EQ_INT(fx_ring_count(&fx), 2);
+    CHECK(fx_near(fx.rings[1].radius, FX_RING_PERFECT_RADIUS, 1e-5f));
+
+    /* None with the effects off; fx_reset clears them. */
+    fx_init(&fx, 29);
+    fx_set_intensity(&fx, 0.0f);
+    fx_make_big_clear(&game, 4, GAME_TSPIN_NONE, false);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+    CHECK_EQ_INT(fx_ring_count(&fx), 0);
+    fx_init(&fx, 29);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+    fx_reset(&fx);
+    CHECK_EQ_INT(fx_ring_count(&fx), 0);
+}
+
+static void test_fx_rings_grow_and_expire(void)
+{
+    Fx fx;
+    GameState game;
+    game_init(&game, 30);
+    fx_init(&fx, 31);
+    fx_make_big_clear(&game, 4, GAME_TSPIN_NONE, false);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+
+    const FxRing *ring = &fx.rings[0];
+    float last = fx_ring_current_radius(ring);
+    const int steps = (int)(FX_RING_SECONDS * 60.0f);
+    for (int step = 0; step < steps; ++step) {
+        fx_update(&fx, 1.0f / 60.0f);
+        const float radius = fx_ring_current_radius(ring);
+        if (ring->life > 0.0f) {
+            CHECK(radius > last);
+            CHECK(radius <= FX_RING_RADIUS);
+        }
+        last = radius;
+    }
+    fx_update(&fx, 2.0f / 60.0f);
+    CHECK_EQ_INT(fx_ring_count(&fx), 0);
+    CHECK(fx_near(fx_ring_current_radius(ring), FX_RING_RADIUS, 1e-5f));
+}
+
+static void test_fx_ring_pool_bound(void)
+{
+    Fx fx;
+    GameState game;
+    game_init(&game, 32);
+    fx_init(&fx, 33);
+    fx_make_big_clear(&game, 4, GAME_TSPIN_NONE, true);
+
+    /* Two rings per perfect clear, many times over: the pool stays full and
+       the rings already on screen keep their place. */
+    for (int i = 0; i < 20; ++i) {
+        fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+        CHECK(fx_ring_count(&fx) <= FX_MAX_RINGS);
+    }
+    CHECK_EQ_INT(fx_ring_count(&fx), FX_MAX_RINGS);
+    for (int i = 0; i < FX_MAX_RINGS; ++i) {
+        CHECK(fx.rings[i].life == FX_RING_SECONDS);
+    }
+
+    /* Once they expire, new ones fit again. */
+    for (int step = 0; step < (int)(FX_RING_SECONDS * 60.0f) + 2; ++step) {
+        fx_update(&fx, 1.0f / 60.0f);
+    }
+    CHECK_EQ_INT(fx_ring_count(&fx), 0);
+    fx_on_events(&fx, GAME_EVENT_LINE_CLEAR, &game);
+    CHECK_EQ_INT(fx_ring_count(&fx), 2);
+}
+
 static void test_fx_clear_visual(void)
 {
     FxClearVisual visual;
@@ -473,6 +733,12 @@ void test_fx_suite(void)
     test_fx_particles_expire();
     test_fx_update_clamps_dt();
     test_fx_pool_capacity_and_dropping();
+    test_fx_hard_drop_sparks();
+    test_fx_sparks_expire_and_fall();
+    test_fx_spark_pool_bound();
+    test_fx_clear_rings();
+    test_fx_rings_grow_and_expire();
+    test_fx_ring_pool_bound();
     test_fx_deterministic();
     test_fx_lock_flash();
     test_fx_hard_drop_trail_and_shake();

@@ -5,8 +5,9 @@
 #include "render/renderer.h"
 
 /*
- * Draws the presentation effects held in Fx: the lock flash, the hard-drop
- * trails and the glow particles. It is the only place that turns fx cell
+ * Draws the presentation effects held in Fx: the lock flash, the shockwave
+ * rings of big clears, the hard-drop trails, the glow particles and the
+ * hard-drop sparks. It is the only place that turns fx cell
  * coordinates into pixels, so the effect simulation stays window-size
  * independent.
  *
@@ -15,8 +16,8 @@
  * readable. The level-up frame pulse is not here: board_view owns the frame and
  * takes the pulse as a parameter.
  *
- * The particles and trails are additive and clipped to a small margin around the
- * playfield, so a burst never paints over the HUD. The blend mode is restored to
+ * The rings, particles and trails are additive and clipped to a small margin
+ * around the playfield, so a burst never paints over the HUD. The blend mode is restored to
  * alpha before returning.
  */
 void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx);

@@ -19,6 +19,21 @@
 #define FX_VIEW_TRAIL_WIDE_ALPHA 0.18f
 #define FX_VIEW_TRAIL_WIDE_SCALE 2.10f
 
+/*
+ * Sparks: how far each streak reaches back along the velocity, in seconds of
+ * flight, over FX_VIEW_SPARK_DOTS dots, and how far their color is pushed
+ * towards white.
+ */
+#define FX_VIEW_SPARK_DOTS 4
+#define FX_VIEW_SPARK_STREAK_SECONDS 0.045f
+#define FX_VIEW_SPARK_HEAT 0.65f
+#define FX_VIEW_SPARK_ALPHA 1.0f
+
+/* Rings: peak alpha, tube width and glow reach, in cells. */
+#define FX_VIEW_RING_ALPHA 0.85f
+#define FX_VIEW_RING_TUBE_CELLS 0.10f
+#define FX_VIEW_RING_GLOW_CELLS 0.45f
+
 /* How far outside the playfield particles may still draw, in cells. */
 #define FX_VIEW_CLIP_MARGIN_CELLS 0.5f
 
@@ -89,6 +104,33 @@ static void fx_view_draw_trails(Renderer *renderer, const BoardLayout *layout, c
     }
 }
 
+/*
+ * A spark is a short streak: a few glow dots back along its velocity, each
+ * smaller and fainter than the one in front, in the piece's color pushed
+ * towards white so it reads as hot.
+ */
+static void fx_view_draw_spark(Renderer *renderer, const BoardLayout *layout,
+                               const FxParticle *particle, float fade)
+{
+    const float cell = (float)layout->cell_size;
+    const Color base = board_view_cell_color((CellType)particle->color);
+    const float heat = FX_VIEW_SPARK_HEAT;
+
+    for (int dot = 0; dot < FX_VIEW_SPARK_DOTS; ++dot) {
+        const float back = (float)dot / (float)FX_VIEW_SPARK_DOTS;
+        const float t = back * FX_VIEW_SPARK_STREAK_SECONDS;
+        const float x = particle->x - particle->vx * t;
+        const float y = particle->y - particle->vy * t;
+        const float size = particle->size * cell * (1.0f - 0.5f * back);
+        const Color color = { base.r + (1.0f - base.r) * heat, base.g + (1.0f - base.g) * heat,
+                              base.b + (1.0f - base.b) * heat,
+                              fade * FX_VIEW_SPARK_ALPHA * (1.0f - 0.6f * back) };
+        renderer_push_styled(renderer, fx_view_pixel_x(layout, x) - size * 0.5f,
+                             fx_view_pixel_y(layout, y) - size * 0.5f, size, size, color,
+                             RECT_STYLE_GLOW, 0.0f, 0.0f, 0.0f);
+    }
+}
+
 static void fx_view_draw_particles(Renderer *renderer, const BoardLayout *layout, const Fx *fx)
 {
     const float cell = (float)layout->cell_size;
@@ -100,6 +142,11 @@ static void fx_view_draw_particles(Renderer *renderer, const BoardLayout *layout
         }
 
         const float fade = particle->life / particle->max_life;
+        if (particle->kind == FX_PARTICLE_SPARK) {
+            fx_view_draw_spark(renderer, layout, particle, fade);
+            continue;
+        }
+
         const Color base = board_view_cell_color((CellType)particle->color);
         const float size = particle->size * cell;
         const Color color = { base.r, base.g, base.b, fade * FX_VIEW_PARTICLE_ALPHA };
@@ -107,6 +154,37 @@ static void fx_view_draw_particles(Renderer *renderer, const BoardLayout *layout
         renderer_push_styled(renderer, fx_view_pixel_x(layout, particle->x) - size * 0.5f,
                              fx_view_pixel_y(layout, particle->y) - size * 0.5f, size, size,
                              color, RECT_STYLE_GLOW, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+/*
+ * A ring is a neon tube along a circle: RECT_STYLE_NEON on a square whose
+ * corner radius is half its side. It fades as it grows, and the effects
+ * intensity scales it like the trails.
+ */
+static void fx_view_draw_rings(Renderer *renderer, const BoardLayout *layout, const Fx *fx)
+{
+    const float cell = (float)layout->cell_size;
+    float tube = cell * FX_VIEW_RING_TUBE_CELLS;
+    if (tube < 1.5f) {
+        tube = 1.5f;
+    }
+    const float reach = cell * FX_VIEW_RING_GLOW_CELLS;
+
+    for (int i = 0; i < FX_MAX_RINGS; ++i) {
+        const FxRing *ring = &fx->rings[i];
+        if (ring->life <= 0.0f || ring->max_life <= 0.0f) {
+            continue;
+        }
+        const float fade = ring->life / ring->max_life;
+        const float radius = fx_ring_current_radius(ring) * cell;
+        const Color base = board_view_cell_color((CellType)ring->color);
+        const Color color = { base.r, base.g, base.b,
+                              fade * FX_VIEW_RING_ALPHA * fx->intensity };
+        const float half = radius + reach;
+        renderer_push_styled(renderer, fx_view_pixel_x(layout, ring->x) - half,
+                             fx_view_pixel_y(layout, ring->y) - half, 2.0f * half, 2.0f * half,
+                             color, RECT_STYLE_NEON, tube, reach, radius);
     }
 }
 
@@ -125,14 +203,15 @@ void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx)
     const bool has_flash = fx_lock_flash_amount(fx) > 0.0f;
     const bool has_trails = fx_view_has_trails(fx);
     const bool has_particles = fx_particle_count(fx) > 0;
-    if (!has_flash && !has_trails && !has_particles) {
+    const bool has_rings = fx_ring_count(fx) > 0;
+    if (!has_flash && !has_trails && !has_particles && !has_rings) {
         return;
     }
 
     if (has_flash) {
         fx_view_draw_lock_flash(renderer, layout, fx);
     }
-    if (!has_trails && !has_particles) {
+    if (!has_trails && !has_particles && !has_rings) {
         return;
     }
 
@@ -148,6 +227,7 @@ void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx)
                       layout->height + (int)((float)layout->cell_size * 2.0f *
                                              FX_VIEW_CLIP_MARGIN_CELLS));
 
+    fx_view_draw_rings(renderer, layout, fx);
     fx_view_draw_trails(renderer, layout, fx);
     fx_view_draw_particles(renderer, layout, fx);
 

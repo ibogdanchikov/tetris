@@ -88,6 +88,12 @@ blurred, and the blur is added back over the scene, so the neon tubes, blocks
 and text glow into the dark around them. **Settings > BLOOM** turns it off and
 on; it is on by default.
 
+**Milestone 7, part 3** adds two particle types. A hard drop throws hot sparks
+sideways from the bottom cells of the landed piece, harder the farther it fell.
+A big clear (four lines, a T-spin that clears lines, or a perfect clear) sends a
+neon shockwave ring out from the cleared rows; a perfect clear sends a second,
+wider one. Both follow the **EFFECTS** setting.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -441,7 +447,9 @@ bits, the recorded cleared rows and the lock / hard-drop effect data. The effect
 suite checks particle lifetimes and the fixed pool bound, deterministic spawning
 from the fx seed, that the game's RNG is untouched, the event-to-effect mapping
 (colours, rows, trails, shake), the dt clamp, the shake decay and the
-clear-animation keyframes. The audio suite checks every effect's length, peak,
+clear-animation keyframes. For the sparks and rings it checks the spawn counts
+and placement, that nothing spawns with the effects off, the lifetimes, the
+spark gravity, ring growth, and that neither pool grows past its capacity. The audio suite checks every effect's length, peak,
 finite samples, click-free ends and determinism, the short-capacity path, the
 mixer (silence, gains, voices ending mid-block, the soft clip, the master ramp)
 and the event-to-sound precedence. The save suite runs the save file parser and
@@ -473,7 +481,8 @@ src/core/                   pure game logic: no SDL, no GL, no malloc, no clock
   game.h/.c                 GameState, game_init, game_step (kicks, hold, gravity, lock delay, T-spins, scoring)
   rng.h/.c                  splitmix64, state is a single uint64_t
 src/fx/                     presentation effects: no SDL, no GL, no malloc, no clock
-  fx.h/.c                   particle pool, effect timers, screen shake, clear-animation maths, clear label
+  fx.h/.c                   particle pool (glow dots, sparks), shockwave rings, effect timers,
+                            screen shake, clear-animation maths, row drop, clear label
 src/audio/                  sound: synthesis and playback
   synth.h/.c                note tables, waveforms, envelopes, sound lengths (SDL-free, tested)
   mix.h/.c                  voice mixing, master ramp and the soft clip (SDL-free, tested)
@@ -561,7 +570,11 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
   no drawing code needs to know about the offset.
 - Particles and trails are drawn with `RECT_STYLE_GLOW` and additive blending and
   clipped to half a cell around the playfield, so a burst never paints over the
-  HUD. The lock flash is the only alpha-blended effect; the level-up pulse
+  HUD. Particles have a kind: glow dots for line clears and lock dust, and sparks
+  for hard drops, which fall under stronger gravity and are drawn as short
+  streaks pushed towards white. Shockwave rings have a pool of their own
+  (`FX_MAX_RINGS`, 4) and are drawn with `RECT_STYLE_NEON` as a tube along a
+  circle that grows fast and then slows. The lock flash is the only alpha-blended effect; the level-up pulse
   brightens the additive neon frame.
 - After a clear, the rows that moved fall into place over `FX_ROW_DROP_SECONDS`
   (0.15 s). `fx` keeps the removed rows and works out how far each row fell;

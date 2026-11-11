@@ -40,18 +40,18 @@ static float fx_lerp(float from, float to, float t)
 static void fx_shake_trigger(Fx *fx, float amplitude, float direction_x, float direction_y,
                              float duration);
 
-/*
- * Finds a free particle slot. The search starts where the previous spawn left
- * off, so live particles spread across the pool instead of piling up at the
- * front and ageing out together. A full pool refuses the spawn; see fx.h for why
- * dropping beats overwriting.
- */
 /* A per-cell particle count scaled by the intensity, rounded to the nearest. */
 static int fx_scaled_count(const Fx *fx, int count)
 {
     return (int)((float)count * fx->intensity + 0.5f);
 }
 
+/*
+ * Finds a free particle slot. The search starts where the previous spawn left
+ * off, so live particles spread across the pool instead of piling up at the
+ * front and ageing out together. A full pool refuses the spawn; see fx.h for why
+ * dropping beats overwriting.
+ */
 static FxParticle *fx_alloc_particle(Fx *fx)
 {
     for (int i = 0; i < FX_MAX_PARTICLES; ++i) {
@@ -83,12 +83,29 @@ static FxTrail *fx_alloc_trail(Fx *fx)
     return NULL;
 }
 
-static void fx_spawn_particle(Fx *fx, float x, float y, float vx, float vy, float life, float size,
-                              CellType color)
+/* Rings work like trails: a small pool of their own, and a full pool drops the spawn. */
+static FxRing *fx_alloc_ring(Fx *fx)
+{
+    for (int i = 0; i < FX_MAX_RINGS; ++i) {
+        const int index = (fx->ring_cursor + i) % FX_MAX_RINGS;
+        if (fx->rings[index].life > 0.0f) {
+            continue;
+        }
+        fx->ring_cursor = (index + 1) % FX_MAX_RINGS;
+        FxRing *ring = &fx->rings[index];
+        memset(ring, 0, sizeof *ring);
+        return ring;
+    }
+    return NULL;
+}
+
+/* Spawns a particle and returns it, or NULL when the pool is full. */
+static FxParticle *fx_spawn_particle(Fx *fx, float x, float y, float vx, float vy, float life,
+                                     float size, CellType color)
 {
     FxParticle *particle = fx_alloc_particle(fx);
     if (particle == NULL) {
-        return;
+        return NULL;
     }
     particle->x = x;
     particle->y = y;
@@ -98,6 +115,8 @@ static void fx_spawn_particle(Fx *fx, float x, float y, float vx, float vy, floa
     particle->max_life = life;
     particle->size = size;
     particle->color = (uint8_t)color;
+    particle->kind = FX_PARTICLE_GLOW;
+    return particle;
 }
 
 /*
@@ -132,7 +151,7 @@ static void fx_spawn_line_effects(Fx *fx, const GameState *game)
                 const float lift = fx_random_unit(fx);
                 const float life = fx_random_unit(fx);
 
-                fx_spawn_particle(
+                (void)fx_spawn_particle(
                     fx, (float)x + 0.5f + (side - 0.5f) * 0.5f,
                     (float)y + 0.5f + (jitter - 0.5f) * 0.5f,
                     centre_offset * FX_LINE_PARTICLE_SPEED_OUT + (side - 0.5f) * 2.0f,
@@ -147,6 +166,55 @@ static void fx_spawn_line_effects(Fx *fx, const GameState *game)
     const float direction_x = rng_next_bounded(&fx->rng_state, 2u) != 0 ? 0.35f : -0.35f;
     fx_shake_trigger(fx, FX_SHAKE_LINE_BASE + FX_SHAKE_LINE_PER_ROW * (float)rows, direction_x,
                      -0.94f, FX_SHAKE_LINE_SECONDS);
+}
+
+static void fx_spawn_ring(Fx *fx, float x, float y, float radius, CellType color)
+{
+    FxRing *ring = fx_alloc_ring(fx);
+    if (ring == NULL) {
+        return;
+    }
+    ring->x = x;
+    ring->y = y;
+    ring->radius = radius;
+    ring->life = FX_RING_SECONDS;
+    ring->max_life = FX_RING_SECONDS;
+    ring->color = (uint8_t)color;
+}
+
+/*
+ * A shockwave for a big clear: four lines, a T-spin that cleared lines, or a
+ * perfect clear, which also gets a second, wider ring. The center is the middle
+ * of the board across the cleared rows that are visible.
+ */
+static void fx_spawn_clear_rings(Fx *fx, const GameState *game)
+{
+    const GameClearResult *clear = &game->last_clear;
+    const bool big = clear->lines >= 4 || (clear->tspin != GAME_TSPIN_NONE && clear->lines > 0) ||
+                     clear->perfect_clear;
+    if (!big || fx->intensity <= 0.0f) {
+        return;
+    }
+
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = 0; i < game->cleared_row_count && i < 4; ++i) {
+        if (game->cleared_rows[i] < BOARD_VISIBLE_HEIGHT) {
+            sum += (float)game->cleared_rows[i] + 0.5f;
+            ++count;
+        }
+    }
+    if (count == 0) {
+        return;
+    }
+
+    const float x = (float)BOARD_WIDTH * 0.5f;
+    const float y = sum / (float)count;
+    const CellType color = piece_cell_type(game->last_locked.type);
+    fx_spawn_ring(fx, x, y, FX_RING_RADIUS, color);
+    if (clear->perfect_clear) {
+        fx_spawn_ring(fx, x, y, FX_RING_PERFECT_RADIUS, color);
+    }
 }
 
 /*
@@ -179,7 +247,7 @@ static void fx_spawn_lock_effects(Fx *fx, const GameState *game)
         for (int n = 0; n < fx_scaled_count(fx, FX_LOCK_DUST_PER_CELL); ++n) {
             const float side = fx_random_unit(fx);
             const float fall = fx_random_unit(fx);
-            fx_spawn_particle(fx, (float)xs[i] + 0.2f + side * 0.6f, (float)ys[i] - 0.05f,
+            (void)fx_spawn_particle(fx, (float)xs[i] + 0.2f + side * 0.6f, (float)ys[i] - 0.05f,
                               (side - 0.5f) * 1.6f, -0.2f - fall * 1.2f, 0.25f + fall * 0.20f,
                               0.16f + side * 0.12f, type);
         }
@@ -257,6 +325,42 @@ static void fx_spawn_hard_drop_effects(Fx *fx, const GameState *game)
         trail->life = FX_TRAIL_SECONDS;
         trail->max_life = FX_TRAIL_SECONDS;
         trail->color = (uint8_t)type;
+    }
+
+    /*
+     * Sparks from the bottom cells of the landed piece: the ones with no piece
+     * cell right under them, so an upright I throws them from one cell and a
+     * flat one from four. A longer drop throws them harder.
+     */
+    const int speed_rows = game->last_hard_drop_rows < FX_SPARK_FULL_SPEED_ROWS
+                               ? game->last_hard_drop_rows
+                               : FX_SPARK_FULL_SPEED_ROWS;
+    const float speed = 0.5f + 0.5f * (float)speed_rows / (float)FX_SPARK_FULL_SPEED_ROWS;
+    for (int i = 0; i < 4; ++i) {
+        bool covered = false;
+        for (int j = 0; j < 4; ++j) {
+            if (to_x[j] == to_x[i] && to_y[j] == to_y[i] - 1) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) {
+            continue;
+        }
+        for (int n = 0; n < fx_scaled_count(fx, FX_SPARKS_PER_CELL); ++n) {
+            const float side = fx_random_unit(fx);
+            const float lift = fx_random_unit(fx);
+            const float life = fx_random_unit(fx);
+            const float sign = side < 0.5f ? -1.0f : 1.0f;
+            FxParticle *spark = fx_spawn_particle(
+                fx, (float)to_x[i] + 0.1f + 0.8f * side, (float)to_y[i] + 0.05f,
+                sign * FX_SPARK_SPEED_SIDE * speed * (0.35f + 0.65f * fx_abs(side * 2.0f - 1.0f)),
+                fx_lerp(FX_SPARK_SPEED_UP_MIN, FX_SPARK_SPEED_UP_MAX, lift) * speed,
+                fx_lerp(FX_SPARK_LIFE_MIN, FX_SPARK_LIFE_MAX, life), 0.22f + 0.12f * lift, type);
+            if (spark != NULL) {
+                spark->kind = FX_PARTICLE_SPARK;
+            }
+        }
     }
 
     float amplitude =
@@ -358,6 +462,7 @@ void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game)
     }
     if ((frame_events & GAME_EVENT_LINE_CLEAR) != 0) {
         fx_spawn_line_effects(fx, game);
+        fx_spawn_clear_rings(fx, game);
     }
     if ((frame_events & GAME_EVENT_LEVEL_UP) != 0) {
         fx->level_pulse = FX_LEVEL_PULSE_SECONDS;
@@ -391,9 +496,10 @@ void fx_update(Fx *fx, float dt)
             continue;
         }
 
-        particle->vy += FX_PARTICLE_GRAVITY * dt;
+        const bool spark = particle->kind == FX_PARTICLE_SPARK;
+        particle->vy += (spark ? FX_SPARK_GRAVITY : FX_PARTICLE_GRAVITY) * dt;
         /* Stable first-order drag: a stall cannot make the velocity flip sign. */
-        const float damping = 1.0f / (1.0f + FX_PARTICLE_DRAG * dt);
+        const float damping = 1.0f / (1.0f + (spark ? FX_SPARK_DRAG : FX_PARTICLE_DRAG) * dt);
         particle->vx *= damping;
         particle->vy *= damping;
         particle->x += particle->vx * dt;
@@ -413,6 +519,17 @@ void fx_update(Fx *fx, float dt)
         trail->life -= dt;
         if (trail->life <= 0.0f) {
             trail->life = 0.0f;
+        }
+    }
+
+    for (int i = 0; i < FX_MAX_RINGS; ++i) {
+        FxRing *ring = &fx->rings[i];
+        if (ring->life <= 0.0f) {
+            continue;
+        }
+        ring->life -= dt;
+        if (ring->life <= 0.0f) {
+            ring->life = 0.0f;
         }
     }
 
@@ -459,6 +576,27 @@ int fx_particle_count(const Fx *fx)
         }
     }
     return count;
+}
+
+int fx_ring_count(const Fx *fx)
+{
+    int count = 0;
+    for (int i = 0; i < FX_MAX_RINGS; ++i) {
+        if (fx->rings[i].life > 0.0f) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+float fx_ring_current_radius(const FxRing *ring)
+{
+    if (ring->max_life <= 0.0f) {
+        return 0.0f;
+    }
+    /* Ease out: fast at first, slowing as it reaches the final radius. */
+    const float left = fx_clamp01(ring->life / ring->max_life);
+    return ring->radius * (1.0f - left * left * left);
 }
 
 float fx_lock_flash_amount(const Fx *fx)

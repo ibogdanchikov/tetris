@@ -26,10 +26,11 @@
  * the pool contents independent of how many spawns were refused.
  */
 
-/* Fixed capacities; all three are generous for the events that feed them. */
+/* Fixed capacities; all four are generous for the events that feed them. */
 #define FX_MAX_PARTICLES 1024
 #define FX_MAX_TRAILS 8
 #define FX_MAX_FLASH_CELLS 4
+#define FX_MAX_RINGS 4
 
 /* Longest integration step a single fx_update may take, in seconds. */
 #define FX_MAX_DT 0.1f
@@ -42,6 +43,15 @@
 /* White-ish lock flash: how much of the cell colour it covers at its peak. */
 #define FX_LOCK_FLASH_STRENGTH 0.68f
 
+/*
+ * What a particle is. The kind picks its physics in fx_update and its look in
+ * fx_view; every kind shares the one pool.
+ */
+typedef enum FxParticleKind {
+    FX_PARTICLE_GLOW = 0, /* a soft glow dot: line clears and lock dust */
+    FX_PARTICLE_SPARK,    /* hot, fast and short-lived, drawn as a streak: hard drops */
+} FxParticleKind;
+
 /* A particle of the glow pool. Positions and velocities are in cells. */
 typedef struct FxParticle {
     float x;
@@ -52,6 +62,7 @@ typedef struct FxParticle {
     float max_life;
     float size;     /* drawn edge length in cells */
     uint8_t color;  /* CellType, the colour index used by the board palette */
+    uint8_t kind;   /* FxParticleKind */
 } FxParticle;
 
 /* A vertical streak left by a hard-dropped piece, one per occupied column. */
@@ -64,6 +75,20 @@ typedef struct FxTrail {
     float max_life;
     uint8_t color; /* CellType */
 } FxTrail;
+
+/*
+ * A shockwave ring from a big clear, centered on the cleared rows. It grows
+ * from nothing to `radius` cells, fast at first and slowing down, and fades out
+ * over its life.
+ */
+typedef struct FxRing {
+    float x;      /* center, in cells */
+    float y;
+    float radius; /* final radius, in cells */
+    float life;   /* seconds left; <= 0 means the slot is free */
+    float max_life;
+    uint8_t color; /* CellType of the piece that made the clear */
+} FxRing;
 
 /* One cell of the locked piece, for the brief white flash. */
 typedef struct FxFlashCell {
@@ -151,6 +176,9 @@ typedef struct Fx {
     FxTrail trails[FX_MAX_TRAILS];
     int trail_cursor;
 
+    FxRing rings[FX_MAX_RINGS];
+    int ring_cursor;
+
     FxFlashCell lock_cells[FX_MAX_FLASH_CELLS];
     int lock_cell_count;
     float lock_flash; /* seconds left */
@@ -202,8 +230,14 @@ void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game);
  */
 void fx_update(Fx *fx, float dt);
 
-/* Number of live particles (life > 0). */
+/* Number of live particles (life > 0), of every kind. */
 int fx_particle_count(const Fx *fx);
+
+/* Number of live shockwave rings. */
+int fx_ring_count(const Fx *fx);
+
+/* A ring's radius right now, in cells: 0 when it starts, `radius` at the end. */
+float fx_ring_current_radius(const FxRing *ring);
 
 /* How white the lock flash is right now: 0..1, scaled by the intensity. */
 float fx_lock_flash_amount(const Fx *fx);
@@ -264,3 +298,26 @@ void fx_clear_visual(float progress, FxClearVisual *out);
 #define FX_SHAKE_LINE_SECONDS 0.36f
 #define FX_SHAKE_MAX 0.25f /* cells; the hard drop cap */
 #define FX_SHAKE_HZ 12.0f  /* wave cycles per second */
+
+/*
+ * Hard-drop sparks: from every bottom cell of the landed piece (a cell with no
+ * piece cell under it), thrown sideways and up and pulled down hard. Their
+ * speed grows with the drop distance up to FX_SPARK_FULL_SPEED_ROWS.
+ */
+#define FX_SPARKS_PER_CELL 3
+#define FX_SPARK_LIFE_MIN 0.20f
+#define FX_SPARK_LIFE_MAX 0.40f
+#define FX_SPARK_SPEED_SIDE 7.0f /* cells per second at most, either way */
+#define FX_SPARK_SPEED_UP_MIN 2.0f
+#define FX_SPARK_SPEED_UP_MAX 6.0f
+#define FX_SPARK_FULL_SPEED_ROWS 10
+#define FX_SPARK_GRAVITY (-28.0f) /* cells per second squared, downward */
+#define FX_SPARK_DRAG 3.0f
+
+/*
+ * Shockwave rings: one for a big clear (four lines, or a T-spin that clears
+ * lines), plus a second, wider one for a perfect clear.
+ */
+#define FX_RING_SECONDS 0.55f
+#define FX_RING_RADIUS 6.0f
+#define FX_RING_PERFECT_RADIUS 11.0f
