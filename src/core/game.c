@@ -293,29 +293,42 @@ static bool game_try_rotate(GameState *game, int direction)
 }
 
 /*
- * Horizontal movement with DAS/ARR. shift_counter counts down to the next
- * move: a fresh press moves at once and loads DAS, and every repeat loads ARR.
+ * Direction the held keys ask for, including the both-keys priority. Split out
+ * so the line-clear delay can charge DAS without an active piece to move.
  */
-static void game_step_shift(GameState *game, const GameInput *input)
+static int8_t game_shift_direction(const GameState *game, const GameInput *input)
 {
     const bool left = (input->held & ACTION_LEFT) != 0;
     const bool right = (input->held & ACTION_RIGHT) != 0;
-    int8_t direction = 0;
 
     if (left && right) {
         const bool press_left = (input->pressed & ACTION_LEFT) != 0;
         const bool press_right = (input->pressed & ACTION_RIGHT) != 0;
         if (press_left != press_right) {
-            direction = press_left ? -1 : 1;
-        } else if (!press_left) {
-            /* Both already held: the one pressed last keeps priority. */
-            direction = game->shift_dir;
+            return press_left ? -1 : 1;
         }
-    } else if (left) {
-        direction = -1;
-    } else if (right) {
-        direction = 1;
+        if (!press_left) {
+            /* Both already held: the one pressed last keeps priority. */
+            return game->shift_dir;
+        }
+        return 0;
     }
+    if (left) {
+        return -1;
+    }
+    if (right) {
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Horizontal movement with DAS/ARR. shift_counter counts down to the next
+ * move: a fresh press moves at once and loads DAS, and every repeat loads ARR.
+ */
+static void game_step_shift(GameState *game, const GameInput *input)
+{
+    const int8_t direction = game_shift_direction(game, input);
 
     if (direction == 0) {
         game->shift_dir = 0;
@@ -348,15 +361,48 @@ static void game_step_shift(GameState *game, const GameInput *input)
 }
 
 /*
- * Writes the piece into the board, clears lines, scores them and spawns the
- * next piece. A piece that locks entirely inside the hidden buffer rows is a
- * lock out and ends the game.
+ * Horizontal input while there is no piece: the rows cannot move, but DAS/ARR
+ * still run. The counter is reloaded exactly as a real repeat would reload it,
+ * so after the delay the new piece continues on the same ARR grid instead of
+ * waiting out a fresh GAME_DAS_TICKS.
+ */
+static void game_step_shift_charge(GameState *game, const GameInput *input)
+{
+    const int8_t direction = game_shift_direction(game, input);
+
+    if (direction == 0) {
+        game->shift_dir = 0;
+        game->shift_counter = 0;
+        return;
+    }
+
+    if (direction != game->shift_dir) {
+        game->shift_dir = direction;
+        game->shift_counter = GAME_DAS_TICKS;
+        return;
+    }
+
+    if (game->shift_counter > 0) {
+        --game->shift_counter;
+    }
+    if (game->shift_counter == 0) {
+        game->shift_counter = GAME_ARR_TICKS;
+    }
+}
+
+/*
+ * Writes the piece into the board, scores completed rows and either waits out
+ * the clear delay or spawns the next piece. A piece that locks entirely inside
+ * the hidden buffer rows is a lock out and ends the game.
  */
 static void game_lock_piece(GameState *game)
 {
     int xs[4];
     int ys[4];
     game_piece_cells(&game->piece, xs, ys);
+
+    /* Snapshot for the view's lock effect, before the cells join the board. */
+    game->last_locked = game->piece;
 
     const CellType type = piece_cell_type(game->piece.type);
     bool all_hidden = true;
@@ -370,19 +416,22 @@ static void game_lock_piece(GameState *game)
     game->events |= GAME_EVENT_LOCK;
 
     /*
-     * The view animates the cleared rows, so record them while they are still
-     * where they were: board_clear_full_rows compacts the field afterwards and
-     * the indices would no longer mean the same thing.
+     * Record the full rows while they are still where they were. They stay on
+     * the board during the clear delay, so these indices remain valid for the
+     * view until the rows are removed; at most four indices are kept.
      */
     game->cleared_row_count = 0;
-    for (int y = 0; y < BOARD_HEIGHT && game->cleared_row_count < 4; ++y) {
-        if (board_row_full(&game->board, y)) {
+    int cleared = 0;
+    for (int y = 0; y < BOARD_HEIGHT; ++y) {
+        if (!board_row_full(&game->board, y)) {
+            continue;
+        }
+        if (game->cleared_row_count < 4) {
             game->cleared_rows[game->cleared_row_count] = (uint8_t)y;
             ++game->cleared_row_count;
         }
+        ++cleared;
     }
-
-    const int cleared = board_clear_full_rows(&game->board);
     game->last_clear_count = (uint8_t)cleared;
 
     if (cleared > 0) {
@@ -404,10 +453,23 @@ static void game_lock_piece(GameState *game)
         }
     }
 
+    /*
+     * Lock out is decided at lock time, as before: the piece is entirely in the
+     * hidden buffer. It wins over the clear delay, because the game ends here;
+     * the completed rows are removed immediately as they used to be, since no
+     * piece follows them.
+     */
     if (all_hidden) {
+        (void)board_clear_full_rows(&game->board);
         game->game_over = true;
         game->game_over_reason = GAME_OVER_LOCK_OUT;
         game->events |= GAME_EVENT_GAME_OVER;
+        return;
+    }
+
+    if (cleared > 0) {
+        game->phase = GAME_PHASE_CLEARING;
+        game->clear_timer = GAME_LINE_CLEAR_DELAY_TICKS;
         return;
     }
 
@@ -561,6 +623,14 @@ int game_ghost_y(const GameState *game)
     return probe.y;
 }
 
+uint16_t game_clear_progress(const GameState *game)
+{
+    if (game->phase != GAME_PHASE_CLEARING) {
+        return 0;
+    }
+    return (uint16_t)(GAME_LINE_CLEAR_DELAY_TICKS - (int)game->clear_timer);
+}
+
 /* Per-tick gravity increment, including the faster soft drop when it is held. */
 static uint32_t game_tick_increment(const GameState *game, bool soft_drop)
 {
@@ -573,11 +643,52 @@ static uint32_t game_tick_increment(const GameState *game, bool soft_drop)
     return fast > GAME_SOFT_DROP_MIN_INCREMENT ? fast : GAME_SOFT_DROP_MIN_INCREMENT;
 }
 
+/*
+ * One tick of the line-clear delay. There is no active piece, so every input is
+ * ignored except a held LEFT/RIGHT, which charges DAS for the next piece. When
+ * the timer runs out the recorded rows are removed and the next piece spawns;
+ * the charged DAS survives that spawn.
+ */
+static void game_step_line_clear(GameState *game, const GameInput *input)
+{
+    game_step_shift_charge(game, input);
+
+    if (game->clear_timer > 0) {
+        --game->clear_timer;
+    }
+    if (game->clear_timer > 0) {
+        return;
+    }
+
+    /*
+     * Nothing changed the board during the delay, so this compaction removes
+     * exactly the rows recorded at the lock.
+     */
+    (void)board_clear_full_rows(&game->board);
+    game->phase = GAME_PHASE_FALLING;
+    game->events |= GAME_EVENT_CLEAR_DONE;
+
+    /* game_place_spawned resets the shift state; a charged DAS must survive. */
+    const int8_t shift_dir = game->shift_dir;
+    const uint16_t shift_counter = game->shift_counter;
+    game_spawn_next(game);
+    game->shift_dir = shift_dir;
+    game->shift_counter = shift_counter;
+}
+
 void game_step(GameState *game, const GameInput *input)
 {
     game->events = 0;
 
     if (game->game_over) {
+        ++game->tick;
+        return;
+    }
+
+    /* A line clear in progress owns the tick: no piece falls and no piece
+       exists until its timer runs out. */
+    if (game->phase == GAME_PHASE_CLEARING) {
+        game_step_line_clear(game, input);
         ++game->tick;
         return;
     }
@@ -611,6 +722,11 @@ void game_step(GameState *game, const GameInput *input)
     if ((input->pressed & ACTION_HARD_DROP) != 0) {
         const int from_y = game->piece.y;
         const int target_y = game_ghost_y(game);
+
+        /* Trail data for the view: where the drop started and how far it went. */
+        game->last_hard_drop_from = game->piece;
+        game->last_hard_drop_rows = (uint8_t)(from_y - target_y);
+
         game->piece.y = (int8_t)target_y;
         game->last_action_was_rotation = false;
         game->events |= GAME_EVENT_HARD_DROP;

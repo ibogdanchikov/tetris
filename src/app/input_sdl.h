@@ -23,12 +23,15 @@ typedef struct AppInputCommands {
     bool restart;
     bool pause_toggle;
     bool focus_lost;
+    bool reload_shaders;
+    bool mute_toggle;
 } AppInputCommands;
 
 /*
  * Applies one SDL event: game keys go to the buffer as actions, Escape and the
  * quit event set commands->quit, R sets commands->restart, P sets
- * commands->pause_toggle, and losing focus clears the buffer so no key stays
+ * commands->pause_toggle, M sets commands->mute_toggle, F5 sets
+ * commands->reload_shaders, and losing focus clears the buffer so no key stays
  * stuck down and sets commands->focus_lost.
  *
  * Whether a lost focus pauses the game is the app's decision, not this layer's:

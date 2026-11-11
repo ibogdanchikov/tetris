@@ -20,6 +20,33 @@ lock out detection and a per-tick event bitmask for presentation.
 from rectangles, HOLD and NEXT panels, the score / level / lines readout, pause
 and the paused and game-over overlays. The window title is plain `Tetris` again.
 
+**Milestone 4, part 1** adds a line-clear delay to the core: completed rows are
+scored at the lock but stay on the board for 24 ticks before they are removed
+and the next piece spawns, while input keeps charging DAS for the next piece.
+
+**Milestone 4, part 2** upgrades the presentation: tetrominoes get a beveled
+block style, the ghost becomes a crisp outline, the renderer can switch between
+alpha and additive blending, and a shader-drawn animated background sits behind
+the board. F5 recompiles the shaders in place and `--assets DIR` points the game
+at a working copy, so shader iteration does not need a rebuild.
+
+**Milestone 4, part 3** adds the effects layer: the full rows now flash white and
+shrink from the centre columns outwards while they wait out the clear delay,
+filled cells burst into glow particles in their own colours, a lock flashes the
+piece and kicks up a little dust, a hard drop leaves a vertical trail and shakes
+the board, and a level-up pulses the playfield frame. The effects live in a
+GL-free, allocation-free `src/fx` module driven only by the game's event bits, so
+the simulation and its seed are untouched.
+
+**Milestone 4, part 4** adds sound. Every effect is synthesised from short note
+lists at startup — no audio files and no dependency beyond SDL audio — then
+pre-rendered into mono float buffers and mixed by a fixed voice pool on SDL's
+audio callback. Moves, rotations, hold, hard drops, locks, line clears (one
+arpeggio per count, a brighter chord for a tetris), level up, game over and pause
+each have a short sound, and a soft clip keeps stacked sounds in range. `M`
+mutes, `--mute` starts muted, and a missing audio device only logs a warning:
+the game runs silent rather than failing.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -50,7 +77,8 @@ UndefinedBehaviorSanitizer).
 The build produces `build/<preset>/tetris`. Assets are copied next to the
 executable as a post-build step, and shaders are loaded from
 `<SDL_GetBasePath()>/assets/shaders`, so the binary works from any working
-directory.
+directory. `--assets DIR` loads them from `DIR/shaders` instead, which is what
+makes live shader editing convenient.
 
 Useful cache options:
 
@@ -67,6 +95,18 @@ Useful cache options:
 
 Press Escape or close the window to quit.
 
+F5 recompiles every shader from the active asset directory. A shader that fails
+to compile is logged and the previous program stays in use, so a typo never
+takes the window down. The background shader is optional: if it fails to load
+the game keeps the flat clear colour instead. To edit the repository shaders
+without rebuilding, run from the repo root against the source assets:
+
+```sh
+./build/debug/tetris --assets assets
+```
+
+Then edit `assets/shaders/*.frag` and press F5.
+
 ### Controls
 
 | Key | Action |
@@ -78,7 +118,9 @@ Press Escape or close the window to quit.
 | Z / Left Ctrl | Rotate counter-clockwise |
 | C / Left Shift | Hold |
 | P | Pause or resume |
+| M | Mute or unmute the sound |
 | R | Restart with a fresh seed |
+| F5 | Reload all shaders (for iteration) |
 | Escape | Quit |
 
 Keys are mapped by scancode, so they follow key positions and work on any
@@ -111,6 +153,35 @@ clears the input buffer and the accumulator, so a key held during the pause does
 not fire on the first tick. **R** restarts and unpauses; a finished run shows
 **GAME OVER** and **PRESS R** instead.
 
+### Audio
+
+There are no audio files. `src/audio/synth.c` renders every effect from a short
+note list when the game starts: a note is a sine, triangle, soft square or noise
+burst with a linear pitch sweep, a linear attack/release envelope and an optional
+one-pole low-pass. Every note starts and ends at zero and the effects peak below
+0.6, so nothing clicks and several sounds can overlap without harshness.
+
+The sounds are a quiet tick per move, a short upward slide for rotate and hold, a
+low thud for a hard drop, a soft thump for a lock, a rising arpeggio for one to
+three cleared lines, a brighter chord sweep for a tetris, a short fanfare for a
+level up, a descending phrase for game over, and a two-tone blip for pause and
+resume. Soft drop is deliberately silent: it fires many times a second and has no
+sound of its own.
+
+`src/audio/audio.c` is the only code that talks to SDL audio. It opens the
+default playback device with a mono float32 stream at 48 kHz — SDL converts to
+whatever the device wants — and mixes up to 16 voices from a callback on SDL's
+audio thread. Voices are stolen oldest-first when the pool is full, the sum is
+soft-clipped so a stack cannot pass full scale, and the mute change is faded over
+about 60 ms rather than stepping the volume. The app thread takes
+`SDL_LockAudioStream` around the voice list and the mute flag; the callback
+already runs with that lock held, so one lock covers both threads.
+
+Audio is optional. If the subsystem, the device or the buffers cannot be set up,
+the game logs one warning, every `audio_*` call becomes a no-op and everything
+else works as before. `M` mutes and unmutes, `--mute` starts muted, and opening a
+device is logged with its driver, name, format and rate.
+
 ### Rules
 
 - **Rotation** uses SRS. A rotation that does not fit in place tries the five
@@ -134,6 +205,13 @@ not fire on the first tick. **R** restarts and unpauses; a finished run shows
 - **Scoring** is 100 / 300 / 500 / 800 for a single / double / triple / tetris,
   multiplied by the level in force *before* the clear. Soft drop adds 1 per row,
   hard drop 2 per row.
+- **Line clear delay**: the score, line count and event happen at the lock, but
+  the full rows stay on the board for `GAME_LINE_CLEAR_DELAY_TICKS` (24) ticks.
+  Input is ignored during the delay, except that a held LEFT/RIGHT keeps
+  charging DAS, so the next piece inherits that progress instead of restarting
+  it. When the timer runs out the rows are removed,
+  `GAME_EVENT_CLEAR_DONE` fires and the next piece spawns. A lock that clears nothing spawns immediately, and a lock out still
+  ends the game on the lock tick.
 - **Level** is `start_level + lines_cleared / 10`, so the run levels up every ten
   lines. `--seed` is the only start-level control for now; the core also offers
   `game_init_at_level`.
@@ -149,8 +227,10 @@ not fire on the first tick. **R** restarts and unpauses; a finished run shows
 | --- | --- |
 | `--frames N` | Render N frames, then exit (smoke tests, screenshots) |
 | `--screenshot PATH` | Write the last rendered frame to PATH as a BMP |
+| `--assets DIR` | Load shaders from `DIR/shaders` instead of next to the binary |
 | `--size WxH` | Initial window size in pixels (default `800x600`) |
 | `--seed N` | Simulation seed (default `0x853c49e6748fea9b`) |
+| `--mute` | Start with the sound muted (`M` toggles it) |
 | `--help` | Print usage |
 
 Example: render two seconds worth of frames and grab the result.
@@ -175,16 +255,23 @@ playfield and HUD layout maths, the built-in font and the input buffer, includin
 a small tick-loop check that a tap between two ticks moves a piece exactly one
 column. The rules suite covers every SRS kick case that could get the y direction
 wrong, hold, the next queue, the gravity table, scoring and levels, lock out, the
-lock delay stall bounds, the event bits and the recorded cleared rows. They are a
-plain assert-style harness — no external framework — and they never link SDL or
-OpenGL.
+line-clear delay and its DAS charging, the lock delay stall bounds, the event
+bits, the recorded cleared rows and the lock / hard-drop effect data. The effects
+suite checks particle lifetimes and the fixed pool bound, deterministic spawning
+from the fx seed, that the game's RNG is untouched, the event-to-effect mapping
+(colours, rows, trails, shake), the dt clamp, the shake decay and the
+clear-animation keyframes. The audio suite checks every effect's length, peak,
+finite samples, click-free ends and determinism, the short-capacity path, the
+mixer (silence, gains, voices ending mid-block, the soft clip, the master ramp)
+and the event-to-sound precedence. They are a plain assert-style harness — no
+external framework — and they never link SDL or OpenGL.
 
 ## Project layout
 
 ```
 CMakeLists.txt              build definition, targets, warnings, asset copy
 CMakePresets.json           debug / release / debug-sanitizers presets
-assets/shaders/             quad.vert, quad.frag (GLSL 330 core)
+assets/shaders/             quad.vert, quad.frag, background.vert, background.frag (GLSL 330 core)
 external/glad/              vendored GLAD2 loader (see its README)
 src/core/                   pure game logic: no SDL, no GL, no malloc, no clock
   board.h/.c                playfield storage, row 0 is the bottom row, hidden buffer rows on top
@@ -193,20 +280,28 @@ src/core/                   pure game logic: no SDL, no GL, no malloc, no clock
   input.h                   held/pressed actions for one tick
   game.h/.c                 GameState, game_init, game_step (kicks, hold, gravity, lock delay, scoring)
   rng.h/.c                  splitmix64, state is a single uint64_t
+src/fx/                     presentation effects: no SDL, no GL, no malloc, no clock
+  fx.h/.c                   particle pool, effect timers, screen shake, clear-animation maths
+src/audio/                  sound: synthesis and playback
+  synth.h/.c                note tables, waveforms, envelopes, sound lengths (SDL-free, tested)
+  mix.h/.c                  voice mixing, master ramp and the soft clip (SDL-free, tested)
+  audio.h/.c                the SDL audio device, stream callback and voice pool
 src/platform/               SDL3 window and GL context lifecycle
   platform.h/.c
 src/render/                 GL rendering
   shader.h/.c               file loading, compile/link with full info logs
-  renderer.h/.c             instanced quad batcher (pixel rects, bottom-left origin, scissor clip)
+  renderer.h/.c             instanced quad batcher with styles, blend modes, background and F5 reload
   board_layout.h/.c         pure layout maths for the board and both HUD panels, GL-free and tested
   font.h/.c                 built-in 5x7 bitmap font data and measuring, GL-free and tested
   text.h/.c                 draws strings as merged pixel-run rectangles
-  board_view.h/.c           playfield, ghost and active piece
+  board_view.h/.c           playfield, ghost, active piece, block / outline styles and the clear animation
+  fx_view.h/.c              lock flash, hard-drop trails and additive glow particles
   hud.h/.c                  hold, next, stats and the paused / game-over overlays
 src/app/                    the one place GL and SDL meet outside platform
   screenshot.h/.c           glReadPixels -> flipped rows -> SDL BMP
   input_buffer.h/.c         SDL-free press/hold buffer between frames and ticks
   input_sdl.h/.c            scancode mapping and SDL event handling
+  sound_map.h/.c            GAME_EVENT_* bits to sound requests, precedence only (SDL-free, tested)
 src/main.c                  CLI parsing and the fixed-timestep loop
 tests/test_main.c           assert-style harness, board / RNG / layout suites
 tests/test_piece.c          piece shape and 7-bag suites
@@ -214,17 +309,20 @@ tests/test_game.c           gameplay suites: spawn, movement, gravity, lock dela
 tests/test_rules.c          milestone 3 suites: kicks, hold, queue, levels, scoring, events
 tests/test_font.c           glyph coverage, lowercase mapping and width arithmetic
 tests/test_input_buffer.c   input buffer suite plus a tap-through-game_step check
+tests/test_fx.c             particle, event-mapping, shake and clear-animation suites
+tests/test_audio.c          synthesis, mixing and event-to-sound precedence suites
 ```
 
-Targets: `glad` (static), `tetris_core` (static), `tetris_view_layout` (static),
-`tetris_input` (static), `tetris` (executable), `tetris_tests` (test executable).
+Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
+`tetris_view_layout` (static), `tetris_input` (static), `tetris_audio` (static),
+`tetris` (executable), `tetris_tests` (test executable).
 
 ## Conventions
 
 - Fixed simulation rate of 60 Hz; rendering runs as fast as the display allows.
   Frame time is clamped to 0.25 s so a stall cannot cause a catch-up spiral, and
-  the leftover accumulator is passed to the renderer as `alpha` for future
-  interpolation.
+  the leftover accumulator is passed to the views as `alpha`. The line-clear
+  animation is the one thing that interpolates with it.
 - The board stores 24 rows: 20 visible ones plus four hidden buffer rows where
   pieces spawn and rotate out of sight. Row 0 is the bottom row.
 - Gameplay durations are tick counts (`GAME_LOCK_DELAY_TICKS`, `GAME_DAS_TICKS`,
@@ -233,6 +331,39 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_view_layout` (static),
   keeps it integer and lets high levels fall several rows in one tick.
 - Renderers and other consumers of `GAME_EVENT_*` must remember that events are
   per tick: a frame that runs several ticks has to OR them together.
+- Effects are presentation only and live in `src/fx`, which knows nothing about
+  SDL or GL. It holds a fixed 1024-particle pool, a few effect timers and its own
+  splitmix64 state; the game's `rng_state` is never touched, so effects cannot
+  change the piece order. When the pool is full new spawns are dropped rather
+  than overwriting older particles. Positions are board cells, so the view scales
+  them with the layout and nothing depends on the window size.
+- `main.c` calls `fx_on_events` once per frame with the OR-ed event bits and then
+  `fx_update` with the clamped frame time. Pause freezes both, and a restart
+  resets the effects. A frame that has no events still updates the timers.
+- Sound is presentation only, like the effects: the core never knows about it.
+  `sound_map_events` turns the frame's OR-ed bits into `SoundRequest`s (a clear
+  replaces the lock click, a hard drop replaces it too, game over suppresses both
+  and plays its phrase) and `audio_play` starts them. The mix is a sum of
+  voices times their gains and the master gain, then a soft clip.
+- The synth and the mixer are SDL-free, deterministic and tested; `audio.c` is
+  the only SDL audio code. Every effect is pre-rendered once at init, so the
+  callback never synthesises or allocates. Voices and the mute flag are guarded
+  by `SDL_LockAudioStream`, which the callback already holds while it runs; a
+  failed `audio_init` is not fatal and turns every call into a no-op.
+- The move tick is throttled in `main.c` to one sound per six ticks: ARR fires
+  every two ticks, and a tick at 30 Hz would buzz. A soft drop is silent for the
+  same reason.
+- The line-clear animation is derived from `GameState`, not from the fx timers:
+  `t = (game_clear_progress + alpha) / GAME_LINE_CLEAR_DELAY_TICKS` drives
+  `fx_clear_visual`, which is a pure, tested function. `board_view` only scales
+  each cell around its centre and mixes the colour towards white.
+- The screen shake is a decaying triangle wave in board cells; the app applies it
+  by translating the whole layout, so the playfield and the HUD move together and
+  no drawing code needs to know about the offset.
+- Particles and trails are drawn with `RECT_STYLE_GLOW` and additive blending and
+  clipped to half a cell around the playfield, so a burst never paints over the
+  HUD. The lock flash and the level-up frame pulse are the only alpha-blended
+  effects.
 - Pixel coordinates in the renderer have their origin in the **bottom-left**
   corner, which matches board row 0 being the bottom row.
 - The layout centres the left panel, playfield and right panel as one group, so
@@ -241,6 +372,22 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_view_layout` (static),
 - The HUD is drawn from rectangles too: one per run of lit font pixels. There are
   no textures and no font files. Values longer than the stats panel shrink their
   glyph size instead of running over the board.
+- Every quad instance is three `vec4`s: rect, colour and
+  `(style, p0, p1, p2)`. Styles are chosen in `quad.frag`, so a beveled cell
+  costs exactly the same one instance as a flat rectangle. `renderer_push_rect`
+  is the flat convenience; `renderer_push_styled` selects `RECT_STYLE_BLOCK`,
+  `RECT_STYLE_OUTLINE` or `RECT_STYLE_GLOW`. Locked cells, the active piece and
+  the HUD previews are blocks, the ghost is an outline, and frames, overlays,
+  grid cells and text stay flat.
+- Blending is GL state: `renderer_set_blend` flushes the batch before it
+  changes, and `renderer_begin` resets it to alpha every frame.
+- The animated background is one full-screen triangle generated from
+  `gl_VertexID` with an empty VAO. Its time comes from the app, is presentation
+  only and wraps at an hour. A missing or broken background shader is not
+  fatal: the flat clear colour shows through and F5 can bring it back.
+- Shader reloading is intentionally forgiving: `renderer_reload_shaders` only
+  swaps a program in after it compiled and linked, so F5 over a typo keeps the
+  previous program running and just logs the error.
 - Pause lives in `main.c`, not in `GameState`: the simulation does not know about
   it. A pause clears the input buffer and the accumulator, so no key pressed
   while paused fires on resume.
@@ -253,7 +400,7 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_view_layout` (static),
 
 - T-spins, back-to-back bonuses, combos and perfect clears in the core.
 - Menus, a start-level picker and a persistent high-score table.
-- Audio for locks, line clears, hold and game over.
+- Music, a volume setting and an audio-device picker.
 - Saving a run or recording a replay.
 - Real font rendering (a texture atlas) once the HUD needs more characters or
   smoother type; the rectangle font is deliberate for now.

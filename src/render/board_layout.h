@@ -81,6 +81,14 @@ typedef struct BoardLayout {
 BoardLayout board_layout_compute(int fb_w, int fb_h);
 
 /*
+ * Moves the whole group (board origin, both panels and everything inside them)
+ * by (dx, dy) framebuffer pixels. The screen shake applies one translation to the
+ * layout, so the board and the HUD move together without any drawing code
+ * needing to know about the offset.
+ */
+void board_layout_translate(BoardLayout *layout, float dx, float dy);
+
+/*
  * Largest integer glyph pixel size in [1, preferred] at which a string of
  * glyph_count characters fits in width pixels. Returns 1 when even one pixel per
  * font pixel is too wide. Long scores use this to shrink until they fit a

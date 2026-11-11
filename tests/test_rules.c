@@ -897,11 +897,335 @@ static void test_cleared_rows_are_recorded_before_the_shift(void)
     CHECK_EQ_INT(game.cleared_rows[0], 1);
     CHECK_EQ_INT(game.cleared_rows[1], 3);
 
+    /* The recorded rows are still full while the clear delay runs. */
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+    CHECK(board_row_full(&game.board, 1));
+    CHECK(board_row_full(&game.board, 3));
+
+    const GameInput none = input_none();
+    for (int tick = 0; tick < GAME_LINE_CLEAR_DELAY_TICKS; ++tick) {
+        game_step(&game, &none);
+    }
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+    CHECK(!board_row_full(&game.board, 1));
+    CHECK(!board_row_full(&game.board, 3));
+
     /* A lock that clears nothing resets the record. */
     board_clear(&game.board);
     game_step(&game, &drop);
     CHECK_EQ_INT(game.last_clear_count, 0);
     CHECK_EQ_INT(game.cleared_row_count, 0);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+}
+
+/* --- Line clear delay --------------------------------------------------- */
+
+/*
+ * Fills the given rows except one hole in column 9 and puts a vertical I in the
+ * well, hard-dropping it with input. The rows are scored on this tick but stay
+ * on the board until the delay ends.
+ */
+static void drop_i_into_well(GameState *game, int rows, const GameInput *input)
+{
+    board_clear(&game->board);
+    for (int y = 0; y < rows; ++y) {
+        fill_row_except(&game->board, y, BOARD_WIDTH - 1, CELL_J);
+    }
+    game_place_piece(game, PIECE_I, 1, BOARD_WIDTH - 3, 0);
+    game_step(game, input);
+}
+
+static void test_line_clear_delay_exact_length(void)
+{
+    GameState game;
+    game_init(&game, 1);
+    const GameInput drop = input_press(ACTION_HARD_DROP);
+    const GameInput none = input_none();
+
+    drop_i_into_well(&game, 4, &drop);
+
+    /* Lock tick: score, lines and the event happen now; rows and piece stay. */
+    const uint32_t serial = game.piece_serial;
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+    CHECK_EQ_INT(game.clear_timer, GAME_LINE_CLEAR_DELAY_TICKS);
+    CHECK_EQ_INT(game_clear_progress(&game), 0);
+    CHECK_EQ_INT(game.lines_cleared, 4);
+    CHECK_EQ_INT(game.last_clear_count, 4);
+    CHECK_EQ_INT(game.piece_serial, serial);
+    CHECK((game.events & GAME_EVENT_HARD_DROP) != 0);
+    CHECK((game.events & GAME_EVENT_LOCK) != 0);
+    CHECK((game.events & GAME_EVENT_LINE_CLEAR) != 0);
+    CHECK((game.events & GAME_EVENT_CLEAR_DONE) == 0);
+    CHECK((game.events & GAME_EVENT_SPAWN) == 0);
+    for (int y = 0; y < 4; ++y) {
+        CHECK(board_row_full(&game.board, y));
+    }
+
+    /* Rows vanish on exactly the last tick of the delay, not before. */
+    for (int tick = 1; tick < GAME_LINE_CLEAR_DELAY_TICKS; ++tick) {
+        game_step(&game, &none);
+        CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+        CHECK_EQ_INT(game.piece_serial, serial);
+        CHECK_EQ_INT(game_clear_progress(&game), tick);
+        CHECK_EQ_INT(game.clear_timer, GAME_LINE_CLEAR_DELAY_TICKS - tick);
+        CHECK((game.events & GAME_EVENT_CLEAR_DONE) == 0);
+        CHECK_EQ_INT(game.events, 0);
+        for (int y = 0; y < 4; ++y) {
+            CHECK(board_row_full(&game.board, y));
+        }
+    }
+
+    game_step(&game, &none);
+
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+    CHECK_EQ_INT(game.clear_timer, 0);
+    CHECK_EQ_INT(game.piece_serial, serial + 1);
+    CHECK((game.events & GAME_EVENT_CLEAR_DONE) != 0);
+    CHECK((game.events & GAME_EVENT_SPAWN) != 0);
+    for (int y = 0; y < BOARD_HEIGHT; ++y) {
+        for (int x = 0; x < BOARD_WIDTH; ++x) {
+            CHECK_EQ_INT(board_get(&game.board, x, y), CELL_EMPTY);
+        }
+    }
+
+    /* CLEAR_DONE is an edge: it fires once. */
+    game_step(&game, &none);
+    CHECK_EQ_INT(game.events, 0);
+    CHECK_EQ_INT(game_clear_progress(&game), 0);
+}
+
+static void test_lock_without_clear_spawns_immediately(void)
+{
+    GameState game;
+    game_init(&game, 2);
+    const uint32_t serial = game.piece_serial;
+    const GameInput drop = input_press(ACTION_HARD_DROP);
+
+    game_step(&game, &drop);
+
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+    CHECK_EQ_INT(game.clear_timer, 0);
+    CHECK_EQ_INT(game_clear_progress(&game), 0);
+    CHECK_EQ_INT(game.piece_serial, serial + 1);
+    CHECK((game.events & GAME_EVENT_SPAWN) != 0);
+    CHECK((game.events & GAME_EVENT_LINE_CLEAR) == 0);
+    CHECK((game.events & GAME_EVENT_CLEAR_DONE) == 0);
+}
+
+static void test_input_ignored_during_line_clear(void)
+{
+    GameState game;
+    game_init(&game, 3);
+    const GameInput drop = input_press(ACTION_HARD_DROP);
+    drop_i_into_well(&game, 1, &drop);
+
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+    const uint32_t score = game.score;
+    const uint32_t serial = game.piece_serial;
+    const uint16_t timer = game.clear_timer;
+    const ActivePiece piece = game.piece;
+    const PieceType next0 = game.next_queue[0];
+    const bool has_hold = game.has_hold;
+    const bool hold_used = game.hold_used;
+
+    /* Rotation, hold, hard drop and soft drop all do nothing. */
+    const GameInput ignored =
+        input_press(ACTION_ROTATE_CW | ACTION_HOLD | ACTION_HARD_DROP | ACTION_SOFT_DROP);
+    game_step(&game, &ignored);
+
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+    CHECK_EQ_INT(game.score, score);
+    CHECK_EQ_INT(game.piece_serial, serial);
+    CHECK_EQ_INT(game.clear_timer, timer - 1);
+    CHECK(memcmp(&game.piece, &piece, sizeof piece) == 0);
+    CHECK_EQ_INT(game.next_queue[0], next0);
+    CHECK_EQ_INT(game.has_hold, has_hold);
+    CHECK_EQ_INT(game.hold_used, hold_used);
+    CHECK_EQ_INT(game.events, 0);
+    CHECK(board_row_full(&game.board, 0));
+
+    /* A second hard drop still adds no points and spawns nothing. */
+    const GameInput second_drop = input_press(ACTION_HARD_DROP);
+    game_step(&game, &second_drop);
+    CHECK_EQ_INT(game.score, score);
+    CHECK_EQ_INT(game.piece_serial, serial);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+}
+
+static void test_held_direction_charges_das_through_the_delay(void)
+{
+    GameState game;
+    game_init(&game, 4);
+
+    /*
+     * LEFT on the lock tick cannot move the I out of the one-wide well, but it
+     * arms DAS. Holding it through the delay must charge that DAS.
+     */
+    const GameInput lock = input_press(ACTION_HARD_DROP | ACTION_LEFT);
+    drop_i_into_well(&game, 1, &lock);
+
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+    CHECK_EQ_INT(game.shift_dir, -1);
+
+    const GameInput left = input_hold(ACTION_LEFT);
+    for (int tick = 0; tick < GAME_LINE_CLEAR_DELAY_TICKS; ++tick) {
+        CHECK_EQ_INT(game.piece_serial, 1);
+        game_step(&game, &left);
+    }
+
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+    CHECK_EQ_INT(game.piece_serial, 2);
+    CHECK_EQ_INT(game.shift_dir, -1);
+
+    /*
+     * The new piece inherits the charged DAS: its first repeat comes within
+     * GAME_ARR_TICKS ticks (here on the ARR grid), not after a fresh DAS wait.
+     */
+    const int start_x = game.piece.x;
+    int moves = 0;
+    for (int tick = 0; tick < GAME_ARR_TICKS; ++tick) {
+        game_step(&game, &left);
+        CHECK(game.piece.x == start_x || game.piece.x == start_x - 1);
+        if (game.piece.x != start_x) {
+            ++moves;
+        }
+    }
+    CHECK_EQ_INT(moves, 1);
+    CHECK_EQ_INT(game.piece.x, start_x - 1);
+    CHECK(game_clear_progress(&game) == 0);
+}
+
+static void test_block_out_after_the_clear_delay(void)
+{
+    GameState game;
+    game_init(&game, 5);
+    const GameInput drop = input_press(ACTION_HARD_DROP);
+    drop_i_into_well(&game, 1, &drop);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+
+    /*
+     * Block the spawn area with rows that have a hole, so they are not full and
+     * survive the one-row compaction.
+     */
+    for (int y = BOARD_VISIBLE_HEIGHT - 1; y < BOARD_HEIGHT; ++y) {
+        fill_row_except(&game.board, y, 0, CELL_T);
+    }
+
+    const GameInput none = input_none();
+    for (int tick = 0; tick < GAME_LINE_CLEAR_DELAY_TICKS; ++tick) {
+        game_step(&game, &none);
+    }
+
+    CHECK(game.game_over);
+    CHECK_EQ_INT(game.game_over_reason, GAME_OVER_BLOCK_OUT);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+    CHECK((game.events & GAME_EVENT_CLEAR_DONE) != 0);
+    CHECK((game.events & GAME_EVENT_GAME_OVER) != 0);
+
+    /* From here on only the tick counter moves. */
+    const uint32_t serial = game.piece_serial;
+    game_step(&game, &none);
+    CHECK_EQ_INT(game.piece_serial, serial);
+    CHECK_EQ_INT(game.events, 0);
+}
+
+/*
+ * A lock out is decided on the lock tick, as before, and wins over the delay.
+ * The completed rows are removed at once because no piece follows them.
+ */
+static void test_lock_out_wins_over_the_delay(void)
+{
+    GameState game;
+    game_init(&game, 6);
+    board_clear(&game.board);
+
+    /* Support at row 19 so the O rests fully inside the buffer rows 20 and 21. */
+    for (int y = 0; y < BOARD_VISIBLE_HEIGHT; ++y) {
+        fill_row_except(&game.board, y, BOARD_WIDTH - 1, CELL_J);
+    }
+    for (int y = BOARD_VISIBLE_HEIGHT; y < BOARD_VISIBLE_HEIGHT + 2; ++y) {
+        for (int x = 0; x < BOARD_WIDTH; ++x) {
+            if (x != 4 && x != 5) {
+                CHECK(board_set(&game.board, x, y, CELL_J));
+            }
+        }
+    }
+    game_place_piece(&game, PIECE_O, 0, 4, BOARD_VISIBLE_HEIGHT);
+    CHECK_EQ_INT(game_ghost_y(&game), BOARD_VISIBLE_HEIGHT);
+
+    const GameInput drop = input_press(ACTION_HARD_DROP);
+    game_step(&game, &drop);
+
+    CHECK(game.game_over);
+    CHECK_EQ_INT(game.game_over_reason, GAME_OVER_LOCK_OUT);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
+    CHECK_EQ_INT(game.last_clear_count, 2);
+    CHECK_EQ_INT(game.lines_cleared, 2);
+    CHECK_EQ_INT(game.clear_timer, 0);
+    CHECK((game.events & GAME_EVENT_LINE_CLEAR) != 0);
+    CHECK((game.events & GAME_EVENT_CLEAR_DONE) == 0);
+    CHECK((game.events & GAME_EVENT_SPAWN) == 0);
+    CHECK_EQ_INT(game.piece_serial, 1);
+
+    /* The two buffer rows are gone immediately, exactly as before the delay. */
+    CHECK(!board_row_full(&game.board, BOARD_VISIBLE_HEIGHT));
+    CHECK(!board_row_full(&game.board, BOARD_VISIBLE_HEIGHT + 1));
+}
+
+static void test_last_locked_and_hard_drop_are_recorded(void)
+{
+    GameState game;
+    game_init(&game, 7);
+    board_clear(&game.board);
+    CHECK(board_set(&game.board, 4, 5, CELL_J));
+    game_place_piece(&game, PIECE_T, 0, 3, 15);
+
+    const ActivePiece before = game.piece;
+    const int ghost_y = game_ghost_y(&game);
+    CHECK(ghost_y < before.y);
+
+    const GameInput drop = input_press(ACTION_HARD_DROP);
+    game_step(&game, &drop);
+
+    CHECK((game.events & GAME_EVENT_LOCK) != 0);
+    CHECK_EQ_INT(game.last_hard_drop_rows, before.y - ghost_y);
+    CHECK_EQ_INT(game.last_hard_drop_from.type, before.type);
+    CHECK_EQ_INT(game.last_hard_drop_from.rotation, before.rotation);
+    CHECK_EQ_INT(game.last_hard_drop_from.x, before.x);
+    CHECK_EQ_INT(game.last_hard_drop_from.y, before.y);
+
+    CHECK_EQ_INT(game.last_locked.type, before.type);
+    CHECK_EQ_INT(game.last_locked.rotation, before.rotation);
+    CHECK_EQ_INT(game.last_locked.x, before.x);
+    CHECK_EQ_INT(game.last_locked.y, ghost_y);
+
+    /* last_locked addresses the cells the lock wrote, in the same colour. */
+    int xs[4];
+    int ys[4];
+    game_piece_cells(&game.last_locked, xs, ys);
+    for (int i = 0; i < 4; ++i) {
+        CHECK_EQ_INT(board_get(&game.board, xs[i], ys[i]), CELL_T);
+    }
+}
+
+static void test_last_locked_on_a_lock_delay_lock(void)
+{
+    GameState game;
+    game_init(&game, 8);
+    board_clear(&game.board);
+    game_place_piece_on_floor(&game, PIECE_T, 0, 3);
+    const ActivePiece before = game.piece;
+
+    const GameInput none = input_none();
+    for (int tick = 0; tick < GAME_LOCK_DELAY_TICKS; ++tick) {
+        game_step(&game, &none);
+    }
+
+    CHECK((game.events & GAME_EVENT_LOCK) != 0);
+    CHECK_EQ_INT(game.last_locked.type, before.type);
+    CHECK_EQ_INT(game.last_locked.rotation, before.rotation);
+    CHECK_EQ_INT(game.last_locked.x, before.x);
+    CHECK_EQ_INT(game.last_locked.y, before.y);
 }
 
 void test_rules_suite(void)
@@ -945,4 +1269,13 @@ void test_rules_suite(void)
     test_events_on_hard_drop();
 
     test_cleared_rows_are_recorded_before_the_shift();
+
+    test_line_clear_delay_exact_length();
+    test_lock_without_clear_spawns_immediately();
+    test_input_ignored_during_line_clear();
+    test_held_direction_charges_das_through_the_delay();
+    test_block_out_after_the_clear_delay();
+    test_lock_out_wins_over_the_delay();
+    test_last_locked_and_hard_drop_are_recorded();
+    test_last_locked_on_a_lock_delay_lock();
 }

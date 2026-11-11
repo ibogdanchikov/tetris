@@ -408,8 +408,46 @@ static void test_board_layout(void)
     CHECK_EQ_INT(negative.cell_size, 1);
 }
 
-static void test_layout_fit_text_pixel(void)
+/*
+ * The screen shake translates the layout as a whole: every rect moves by the
+ * same offset and nothing is resized, which is what keeps the HUD glued to the
+ * board while the group wobbles.
+ */
+static void test_board_layout_translate(void)
 {
+    const BoardLayout base = board_layout_compute(800, 600);
+    BoardLayout moved = base;
+    const float dx = 7.5f;
+    const float dy = -3.0f;
+    board_layout_translate(&moved, dx, dy);
+
+    CHECK(moved.origin_x == base.origin_x + dx);
+    CHECK(moved.origin_y == base.origin_y + dy);
+    CHECK_EQ_INT(moved.cell_size, base.cell_size);
+    CHECK_EQ_INT(moved.width, base.width);
+    CHECK_EQ_INT(moved.height, base.height);
+
+    CHECK(moved.left_panel.x == base.left_panel.x + dx);
+    CHECK(moved.left_panel.y == base.left_panel.y + dy);
+    CHECK(moved.right_panel.x == base.right_panel.x + dx);
+    CHECK(moved.right_panel.y == base.right_panel.y + dy);
+    CHECK(moved.hold_box.x == base.hold_box.x + dx);
+    CHECK(moved.hold_box.y == base.hold_box.y + dy);
+    CHECK(moved.stats_area.x == base.stats_area.x + dx);
+    CHECK(moved.stats_area.y == base.stats_area.y + dy);
+    CHECK(moved.next_box.x == base.next_box.x + dx);
+    CHECK(moved.next_box.y == base.next_box.y + dy);
+    CHECK(moved.next_box.w == base.next_box.w);
+    CHECK(moved.next_box.h == base.next_box.h);
+    for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
+        CHECK(moved.next_slots[i].x == base.next_slots[i].x + dx);
+        CHECK(moved.next_slots[i].y == base.next_slots[i].y + dy);
+        CHECK(moved.next_slots[i].w == base.next_slots[i].w);
+        CHECK(moved.next_slots[i].h == base.next_slots[i].h);
+    }
+}
+
+static void test_layout_fit_text_pixel(void){
     CHECK_EQ_INT(board_layout_fit_text_pixel(1000, 1, 3), 3);
     CHECK_EQ_INT(board_layout_fit_text_pixel(15, 1, 3), 3);
     CHECK_EQ_INT(board_layout_fit_text_pixel(14, 1, 3), 2);
@@ -434,12 +472,15 @@ int main(void)
     test_board_clear_buffer_row();
     test_rng_determinism();
     test_board_layout();
+    test_board_layout_translate();
     test_layout_fit_text_pixel();
     test_piece_suite();
     test_game_suite();
     test_rules_suite();
     test_input_suite();
     test_font_suite();
+    test_fx_suite();
+    test_audio_suite();
 
     if (test_failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", test_failures);

@@ -756,10 +756,22 @@ static void test_game_line_clear_with_i(void)
     const GameInput drop = input_press(ACTION_HARD_DROP);
     game_step(&game, &drop);
 
+    /* The rows are scored at once but stay on the board for the clear delay. */
     CHECK_EQ_INT(game.lines_cleared, 4);
     CHECK_EQ_INT(game.last_clear_count, 4);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_CLEARING);
+    CHECK_EQ_INT(game.piece_serial, 1);
+    CHECK_EQ_INT(count_filled_cells(&game.board), 40);
+
+    const GameInput none = input_none();
+    for (int tick = 0; tick < GAME_LINE_CLEAR_DELAY_TICKS; ++tick) {
+        CHECK_EQ_INT(game.piece_serial, 1);
+        game_step(&game, &none);
+    }
+
     CHECK_EQ_INT(count_filled_cells(&game.board), 0);
     CHECK_EQ_INT(game.piece_serial, 2);
+    CHECK_EQ_INT(game.phase, GAME_PHASE_FALLING);
 }
 
 static void test_game_piece_cells_helper(void)
@@ -811,13 +823,17 @@ static void test_game_replay_is_deterministic(void)
 {
     GameState first;
     GameState second;
-    game_init(&first, 2026);
-    game_init(&second, 2026);
+    /* Seed 4 is a run that clears rows inside 5000 ticks, so the replay covers
+       the line-clear delay as well as the ordinary falling path. */
+    game_init(&first, 4);
+    game_init(&second, 4);
 
     TestInputRng first_generator = { 99, 0 };
     TestInputRng second_generator = { 99, 0 };
 
     int holds = 0;
+    int clears = 0;
+    int clear_dones = 0;
     for (int tick = 0; tick < 5000; ++tick) {
         const GameInput first_input = test_random_input(&first_generator);
         const GameInput second_input = test_random_input(&second_generator);
@@ -826,6 +842,12 @@ static void test_game_replay_is_deterministic(void)
         game_step(&second, &second_input);
         if ((first.events & GAME_EVENT_HOLD) != 0) {
             ++holds;
+        }
+        if ((first.events & GAME_EVENT_LINE_CLEAR) != 0) {
+            ++clears;
+        }
+        if ((first.events & GAME_EVENT_CLEAR_DONE) != 0) {
+            ++clear_dones;
         }
     }
 
@@ -837,6 +859,12 @@ static void test_game_replay_is_deterministic(void)
     CHECK(first.lines_cleared > 0 || first.game_over);
     /* And the random player really did reach for the hold key. */
     CHECK(holds > 0);
+
+    /* The run must have gone through the line-clear delay at least once, so a
+       replay covers that path too. */
+    CHECK(clears > 0);
+    CHECK(clear_dones > 0);
+    CHECK(clear_dones <= clears);
 }
 
 void test_game_suite(void)

@@ -19,6 +19,14 @@
 #define GAME_LOCK_DELAY_TICKS 30 /* time a resting piece may still be moved */
 #define GAME_MAX_LOCK_RESETS 15  /* how often a move may reset the lock delay */
 
+/*
+ * How long completed rows stay on the board before they are removed, so the
+ * view can animate them. Score, lines and GAME_EVENT_LINE_CLEAR still happen on
+ * the lock tick; the rows disappear and the next piece spawns
+ * GAME_LINE_CLEAR_DELAY_TICKS ticks later, together with GAME_EVENT_CLEAR_DONE.
+ */
+#define GAME_LINE_CLEAR_DELAY_TICKS 24
+
 /* How many pieces the next queue holds; the first one is drawn as the preview. */
 #define GAME_NEXT_COUNT 3
 
@@ -43,10 +51,27 @@ typedef enum GameOverReason {
 } GameOverReason;
 
 /*
+ * What the tick is doing. GAME_PHASE_FALLING runs the active piece normally;
+ * GAME_PHASE_CLEARING counts out GAME_LINE_CLEAR_DELAY_TICKS while the full rows
+ * are still on the board and nothing is falling. Game over stays a separate
+ * flag: it already has a reason enum and short-circuits game_step, so folding it
+ * into the phase would only duplicate that check.
+ */
+typedef enum GamePhase {
+    GAME_PHASE_FALLING = 0,
+    GAME_PHASE_CLEARING,
+} GamePhase;
+
+/*
  * What happened during the most recent tick. The bits are meant for
  * presentation (animations, sound) and are not part of the rules; they are
  * cleared at the start of every game_step. A frame that runs several ticks must
  * OR the values together.
+ *
+ * GAME_EVENT_LOCK reports GameState.last_locked; GAME_EVENT_HARD_DROP reports
+ * last_hard_drop_rows and last_hard_drop_from. GAME_EVENT_LINE_CLEAR marks the
+ * lock that completed rows, and GAME_EVENT_CLEAR_DONE marks the later tick on
+ * which they were removed and the next piece spawned.
  */
 typedef enum GameEvent {
     GAME_EVENT_MOVE = 1u << 0,
@@ -60,6 +85,7 @@ typedef enum GameEvent {
     GAME_EVENT_LEVEL_UP = 1u << 8,
     GAME_EVENT_GAME_OVER = 1u << 9,
     GAME_EVENT_SPAWN = 1u << 10,
+    GAME_EVENT_CLEAR_DONE = 1u << 11, /* the delayed rows are gone, next piece spawned */
 } GameEvent;
 
 /* The falling piece. x, y is the bottom-left corner of its SRS bounding box. */
@@ -98,8 +124,11 @@ typedef struct GameState {
     uint32_t level;       /* start_level + lines_cleared / 10 */
     uint32_t start_level; /* level at game_init, kept so the formula is explicit */
 
-    uint8_t last_clear_count; /* lines removed by the most recent lock */
-    uint8_t cleared_rows[4];  /* row indices as they were before the shift */
+    uint8_t last_clear_count; /* lines completed by the most recent lock */
+    /* Row indices as they were at the lock. Valid while GAME_PHASE_CLEARING
+       (the rows are still on the board) and afterwards as a record of what was
+       removed. At most four indices are kept. */
+    uint8_t cleared_rows[4];
     uint8_t cleared_row_count;
 
     bool has_hold;
@@ -109,6 +138,28 @@ typedef struct GameState {
     /* Rotation bookkeeping, kept for T-spin detection in a later milestone. */
     int8_t last_kick_index;      /* 0 = no offset, 1..4 = kick table entry */
     bool last_action_was_rotation;
+
+    /*
+     * Where the tick is: falling or counting out a line clear. While clearing
+     * there is no active piece, so the piece fields hold the last locked piece
+     * but must not be read as one. game_over is separate, see GamePhase.
+     */
+    GamePhase phase;
+    uint16_t clear_timer; /* ticks left before the cleared rows are removed */
+
+    /*
+     * Effects data. These are snapshots of the piece at the moment the lock was
+     * written, so their cells are absolute board coordinates.
+     *
+     * last_locked      set on every GAME_EVENT_LOCK tick.
+     * last_hard_drop_* set on every GAME_EVENT_HARD_DROP tick, before the drop;
+     *                  rows is the distance travelled and last_hard_drop_from
+     *                  the piece as it was at the top. Both are useful for a
+     *                  trail; rows is 0 when the piece was already resting.
+     */
+    ActivePiece last_locked;
+    uint8_t last_hard_drop_rows;
+    ActivePiece last_hard_drop_from;
 
     bool game_over;
     GameOverReason game_over_reason;
@@ -147,6 +198,12 @@ void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level);
  * When both LEFT and RIGHT are held the most recently pressed one wins; both
  * pressed in the same tick cancel until one is released.
  *
+ * While phase is GAME_PHASE_CLEARING every input is ignored except LEFT/RIGHT,
+ * which keep charging the DAS/ARR counters so the piece that spawns after the
+ * delay inherits that progress instead of resetting it. When the timer reaches
+ * zero the recorded rows are removed, GAME_EVENT_CLEAR_DONE fires and the next
+ * piece spawns (which may end the game with BLOCK_OUT).
+ *
  * A game that is over only advances the tick counter.
  */
 void game_step(GameState *game, const GameInput *input);
@@ -168,6 +225,15 @@ bool game_piece_fits(const Board *board, const ActivePiece *piece);
  * I and of the 3x3 pieces are not on the box bottom.
  */
 int game_ghost_y(const GameState *game);
+
+/*
+ * How far the line-clear animation has got, in ticks: 0 on the lock tick, then
+ * 1 .. GAME_LINE_CLEAR_DELAY_TICKS - 1 on the delay ticks. Returns 0 outside
+ * GAME_PHASE_CLEARING, including the tick that removes the rows. Integer only,
+ * so presentation can scale it freely
+ * (elapsed = GAME_LINE_CLEAR_DELAY_TICKS - clear_timer).
+ */
+uint16_t game_clear_progress(const GameState *game);
 
 /* Absolute board cells of the active piece. */
 void game_piece_cells(const ActivePiece *piece, int out_x[4], int out_y[4]);

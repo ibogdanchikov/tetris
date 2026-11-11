@@ -100,6 +100,25 @@ BoardLayout board_layout_compute(int fb_w, int fb_h)
     return layout;
 }
 
+void board_layout_translate(BoardLayout *layout, float dx, float dy)
+{
+    layout->origin_x += dx;
+    layout->origin_y += dy;
+
+    LayoutRect *rects[] = {
+        &layout->left_panel, &layout->right_panel, &layout->hold_box,
+        &layout->stats_area, &layout->next_box,
+    };
+    for (int i = 0; i < (int)(sizeof rects / sizeof rects[0]); ++i) {
+        rects[i]->x += dx;
+        rects[i]->y += dy;
+    }
+    for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
+        layout->next_slots[i].x += dx;
+        layout->next_slots[i].y += dy;
+    }
+}
+
 int board_layout_fit_text_pixel(int width, int glyph_count, int preferred)
 {
     if (preferred < 1) {

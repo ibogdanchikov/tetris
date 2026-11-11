@@ -84,6 +84,15 @@ add_library(tetris_core STATIC
 target_include_directories(tetris_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 tetris_enable_warnings(tetris_core)
 
+# Presentation effects: particles, effect timers and the line-clear animation
+# maths. No SDL, no GL, so the tests link it straight into the harness.
+add_library(tetris_fx STATIC
+    src/fx/fx.c
+)
+target_include_directories(tetris_fx PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(tetris_fx PUBLIC tetris_core)
+tetris_enable_warnings(tetris_fx)
+
 # Layout maths and the built-in font only: no GL, no SDL, so the tests can link
 # them on their own.
 add_library(tetris_view_layout STATIC
@@ -102,20 +111,34 @@ target_include_directories(tetris_input PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 target_link_libraries(tetris_input PUBLIC tetris_core)
 tetris_enable_warnings(tetris_input)
 
+# Sound synthesis, voice mixing and the event-to-sound mapping. No SDL, so the
+# tests link all of it; only src/audio/audio.c (in the executable) talks to SDL.
+add_library(tetris_audio STATIC
+    src/app/sound_map.c
+    src/audio/mix.c
+    src/audio/synth.c
+)
+target_include_directories(tetris_audio PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(tetris_audio PUBLIC tetris_core)
+tetris_enable_warnings(tetris_audio)
+
 # --- application ------------------------------------------------------------
 
 add_executable(tetris
     src/main.c
     src/app/input_sdl.c
     src/app/screenshot.c
+    src/audio/audio.c
     src/platform/platform.c
     src/render/board_view.c
+    src/render/fx_view.c
     src/render/hud.c
     src/render/renderer.c
     src/render/shader.c
     src/render/text.c
 )
-target_link_libraries(tetris PRIVATE tetris_core tetris_input tetris_view_layout glad SDL3::SDL3)
+target_link_libraries(tetris PRIVATE tetris_core tetris_fx tetris_input tetris_audio
+                                     tetris_view_layout glad SDL3::SDL3)
 tetris_enable_warnings(tetris)
 
 # Assets are looked up relative to the executable, so they have to sit next to
@@ -132,14 +155,17 @@ add_custom_command(TARGET tetris POST_BUILD
 enable_testing()
 
 add_executable(tetris_tests
+    tests/test_audio.c
     tests/test_font.c
+    tests/test_fx.c
     tests/test_input_buffer.c
     tests/test_main.c
     tests/test_game.c
     tests/test_piece.c
     tests/test_rules.c
 )
-target_link_libraries(tetris_tests PRIVATE tetris_core tetris_input tetris_view_layout)
+target_link_libraries(tetris_tests PRIVATE tetris_core tetris_fx tetris_input tetris_audio
+                                          tetris_view_layout)
 tetris_enable_warnings(tetris_tests)
 
 add_test(NAME tetris_tests COMMAND tetris_tests)

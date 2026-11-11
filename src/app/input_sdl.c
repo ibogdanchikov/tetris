@@ -52,6 +52,10 @@ void app_input_handle_event(InputBuffer *buffer, const SDL_Event *event,
             commands->restart = true;
         } else if (event->key.scancode == SDL_SCANCODE_P) {
             commands->pause_toggle = true;
+        } else if (event->key.scancode == SDL_SCANCODE_M) {
+            commands->mute_toggle = true;
+        } else if (event->key.scancode == SDL_SCANCODE_F5) {
+            commands->reload_shaders = true;
         }
         break;
     }
