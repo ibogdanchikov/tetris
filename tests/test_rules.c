@@ -622,13 +622,18 @@ static void test_hard_drop_points(void)
     CHECK((game.events & GAME_EVENT_HARD_DROP) != 0);
 }
 
-/* Drops a vertical I into a one-wide well and returns the score it added. */
+/*
+ * Drops a vertical I into a one-wide well and returns the score it added. One
+ * block stays above the cleared rows, so a four-line clear is not also a
+ * perfect clear.
+ */
 static uint32_t clear_rows_with_i(GameState *game, int rows)
 {
     board_clear(&game->board);
     for (int y = 0; y < rows; ++y) {
         fill_row_except(&game->board, y, BOARD_WIDTH - 1, CELL_J);
     }
+    board_set(&game->board, 0, rows, CELL_J);
     game_place_piece(game, PIECE_I, 1, BOARD_WIDTH - 3, 0);
 
     const uint32_t before = game->score;

@@ -89,8 +89,21 @@ static const uint32_t GRAVITY_INCREMENT[GAME_MAX_GRAVITY_LEVEL] = {
     433425, /* 17 */ 749597, /* 18 */ 1325716, /* 19 */ 2398490, /* 20 */
 };
 
-/* Line clear points before the level multiplier; index is the line count. */
-static const uint32_t LINE_CLEAR_POINTS[5] = { 0, 100, 300, 500, 800 };
+/*
+ * Line clear points before the level multiplier, by T-spin kind and line count
+ * (Tetris Guideline). A T covers at most three rows, so the T-spin rows past
+ * three only guard a test board that already had full rows on it.
+ */
+static const uint32_t LINE_CLEAR_POINTS[3][5] = {
+    [GAME_TSPIN_NONE] = { 0, 100, 300, 500, 800 },
+    [GAME_TSPIN_MINI] = { 100, 200, 400, 400, 400 },
+    [GAME_TSPIN_FULL] = { 400, 800, 1200, 1600, 1600 },
+};
+
+/* Perfect clear points before the level multiplier, by line count, and the
+   bigger award for a back-to-back four-line perfect clear. */
+static const uint32_t PERFECT_CLEAR_POINTS[5] = { 0, 800, 1200, 1800, 2000 };
+#define PERFECT_CLEAR_B2B_FOUR_POINTS 3200u
 
 uint32_t game_gravity_increment(uint32_t level)
 {
@@ -396,16 +409,131 @@ static void game_step_shift_charge(GameState *game, const GameInput *input)
     }
 }
 
+/* A corner counts when it is filled or outside the board, walls and floor included. */
+static bool game_corner_blocked(const Board *board, int x, int y)
+{
+    return !board_in_bounds(x, y) || board_get(board, x, y) != CELL_EMPTY;
+}
+
+GameTSpin game_tspin_kind(const Board *board, const ActivePiece *piece,
+                          bool last_action_was_rotation, int last_kick_index)
+{
+    if (piece->type != PIECE_T || !last_action_was_rotation) {
+        return GAME_TSPIN_NONE;
+    }
+
+    /* The T's center is the middle of its 3x3 box in every rotation. */
+    const int cx = piece->x + 1;
+    const int cy = piece->y + 1;
+    const bool top_left = game_corner_blocked(board, cx - 1, cy + 1);
+    const bool top_right = game_corner_blocked(board, cx + 1, cy + 1);
+    const bool bottom_left = game_corner_blocked(board, cx - 1, cy - 1);
+    const bool bottom_right = game_corner_blocked(board, cx + 1, cy - 1);
+
+    const int blocked = (int)top_left + (int)top_right + (int)bottom_left + (int)bottom_right;
+    if (blocked < 3) {
+        return GAME_TSPIN_NONE;
+    }
+
+    /* The two corners on the side the T points to: up, right, down, left. */
+    bool front = false;
+    switch (((int)piece->rotation % 4 + 4) % 4) {
+    case 0:
+        front = top_left && top_right;
+        break;
+    case 1:
+        front = top_right && bottom_right;
+        break;
+    case 2:
+        front = bottom_left && bottom_right;
+        break;
+    default:
+        front = top_left && bottom_left;
+        break;
+    }
+    if (front || last_kick_index == 4) {
+        return GAME_TSPIN_FULL;
+    }
+    return GAME_TSPIN_MINI;
+}
+
+/* True when every row that is not full is empty, so removing the full rows
+   leaves nothing on the board. */
+static bool game_clear_leaves_board_empty(const Board *board)
+{
+    for (int y = 0; y < BOARD_HEIGHT; ++y) {
+        if (board_row_full(board, y)) {
+            continue;
+        }
+        for (int x = 0; x < BOARD_WIDTH; ++x) {
+            if (board_get(board, x, y) != CELL_EMPTY) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /*
- * Writes the piece into the board, scores completed rows and either waits out
- * the clear delay or spawns the next piece. A piece that locks entirely inside
- * the hidden buffer rows is a lock out and ends the game.
+ * Scores one lock from the table and records it in last_clear. Points use the
+ * level that was in force before the clear. Back-to-back multiplies only the
+ * line clear points; the combo and the perfect clear are added on top.
+ */
+static void game_score_lock(GameState *game, int lines, GameTSpin tspin)
+{
+    /* A tetromino can complete at most four rows; clamping keeps a stray
+       pre-filled board from reading past the tables. */
+    const int index = lines > 4 ? 4 : lines;
+    GameClearResult *result = &game->last_clear;
+    memset(result, 0, sizeof *result);
+    result->lines = (uint8_t)index;
+    result->tspin = (uint8_t)tspin;
+
+    uint64_t points = LINE_CLEAR_POINTS[tspin][index];
+    if (lines > 0) {
+        const bool difficult = index == 4 || tspin != GAME_TSPIN_NONE;
+        if (difficult && game->back_to_back) {
+            points = points * GAME_B2B_NUMERATOR / GAME_B2B_DENOMINATOR;
+            result->back_to_back = true;
+        }
+        game->back_to_back = difficult;
+
+        if (game->clear_streak < UINT16_MAX) {
+            ++game->clear_streak;
+        }
+        result->combo = (uint16_t)(game->clear_streak - 1u);
+        points += (uint64_t)GAME_COMBO_POINTS * result->combo;
+
+        if (game_clear_leaves_board_empty(&game->board)) {
+            result->perfect_clear = true;
+            points += result->back_to_back && index == 4 ? PERFECT_CLEAR_B2B_FOUR_POINTS
+                                                          : PERFECT_CLEAR_POINTS[index];
+        }
+    } else {
+        game->clear_streak = 0;
+    }
+
+    points *= game->level;
+    result->points = points > UINT32_MAX ? UINT32_MAX : (uint32_t)points;
+    game->score = game_score_add(game->score, points);
+}
+
+/*
+ * Writes the piece into the board, scores the lock and either waits out the
+ * clear delay or spawns the next piece. A piece that locks entirely inside the
+ * hidden buffer rows is a lock out and ends the game.
  */
 static void game_lock_piece(GameState *game)
 {
     int xs[4];
     int ys[4];
     game_piece_cells(&game->piece, xs, ys);
+
+    /* The T's corners are never its own cells, so the rule can look at the
+       board before or after the piece is written; before is clearer. */
+    const GameTSpin tspin = game_tspin_kind(&game->board, &game->piece,
+                                            game->last_action_was_rotation,
+                                            game->last_kick_index);
 
     /* Snapshot for the view's lock effect, before the cells join the board. */
     game->last_locked = game->piece;
@@ -440,17 +568,11 @@ static void game_lock_piece(GameState *game)
     }
     game->last_clear_count = (uint8_t)cleared;
 
+    /* Points use the level that was in force before the clear. */
+    game_score_lock(game, cleared, tspin);
+
     if (cleared > 0) {
         game->events |= GAME_EVENT_LINE_CLEAR;
-
-        /* A tetromino can complete at most four rows; clamping keeps a stray
-           pre-filled board from reading past the table. */
-        const int points_index = cleared > 4 ? 4 : cleared;
-
-        /* Points use the level that was in force before the clear. */
-        game->score = game_score_add(
-            game->score, (uint64_t)LINE_CLEAR_POINTS[points_index] * game->level);
-
         game->lines_cleared += (uint32_t)cleared;
         const uint32_t level = game->start_level + game->lines_cleared / 10u;
         if (level > game->level) {
@@ -755,8 +877,12 @@ void game_step(GameState *game, const GameInput *input)
         game->last_hard_drop_from = game->piece;
         game->last_hard_drop_rows = (uint8_t)(from_y - target_y);
 
+        /* Dropping in place keeps a spin: the rotation is still the last
+           thing that moved the piece. */
+        if (target_y != from_y) {
+            game->last_action_was_rotation = false;
+        }
         game->piece.y = (int8_t)target_y;
-        game->last_action_was_rotation = false;
         game->events |= GAME_EVENT_HARD_DROP;
         game->score = game_score_add(game->score,
                                      (uint64_t)(from_y - target_y) * 2u);

@@ -482,6 +482,7 @@ int main(void)
     test_fx_suite();
     test_audio_suite();
     test_save_suite();
+    test_scoring_suite();
 
     if (test_failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", test_failures);

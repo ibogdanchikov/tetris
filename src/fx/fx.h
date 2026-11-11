@@ -89,6 +89,23 @@ typedef struct FxShake {
     float offset_y;
 } FxShake;
 
+/*
+ * The label for a notable clear: a T-spin, four lines, a back-to-back bonus, a
+ * combo or a perfect clear. It keeps a copy of the lock's GameClearResult and
+ * stays up FX_LABEL_SECONDS, fading out over the last FX_LABEL_FADE_SECONDS.
+ */
+#define FX_LABEL_SECONDS 1.6f
+#define FX_LABEL_FADE_SECONDS 0.4f
+
+/* The longest label is B2B, MINI, T-SPIN, the clear, COMBO n, PERFECT, CLEAR. */
+#define FX_LABEL_MAX_LINES 7
+#define FX_LABEL_LINE_SIZE 12
+
+typedef struct FxLabel {
+    GameClearResult clear;
+    float life; /* seconds left; <= 0 means no label */
+} FxLabel;
+
 /* Animation keyframes, exported so the tests can name them instead of guessing. */
 #define FX_CLEAR_FLASH_PEAK 0.20f
 #define FX_CLEAR_FLASH_END 0.45f
@@ -127,6 +144,8 @@ typedef struct Fx {
 
     FxShake shake;
 
+    FxLabel label;
+
     /* How strong the effects are, 0..1; see fx_set_intensity. */
     float intensity;
 } Fx;
@@ -145,15 +164,17 @@ void fx_reset(Fx *fx);
  * Scales the effects, clamped to 0..1: the particle counts (rounded per cell),
  * the shake, the lock flash, the hard-drop trails and the level-up pulse. At 1
  * everything is exactly as tuned below; at 0 none of them happen. The
- * line-clear animation is not scaled: it shows which rows are going away.
+ * line-clear animation and the clear label are not scaled: they tell the player
+ * what happened.
  */
 void fx_set_intensity(Fx *fx, float intensity);
 
 /*
  * Turns the events of a whole frame into effects. Call it once per frame after
  * the ticks have run and with the frame's OR-ed event bits; `game` supplies the
- * snapshots the core records (last_locked, last_hard_drop_*), the cleared rows
- * and, while the clear delay runs, the cells that are about to vanish.
+ * snapshots the core records (last_locked, last_hard_drop_*, last_clear), the
+ * cleared rows and, while the clear delay runs, the cells that are about to
+ * vanish.
  */
 void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game);
 
@@ -173,6 +194,17 @@ float fx_lock_flash_amount(const Fx *fx);
 
 /* How bright the level-up frame pulse is right now: 0..1, scaled by the intensity. */
 float fx_level_pulse_amount(const Fx *fx);
+
+/* How visible the clear label is: 1 while it is up, fading to 0 at the end. */
+float fx_label_alpha(const Fx *fx);
+
+/*
+ * The clear label's text, top line first, written into lines; returns how many
+ * lines there are, 0 when no label is up. Lines are B2B, MINI, T-SPIN, the
+ * clear (SINGLE, DOUBLE, TRIPLE or QUAD), COMBO n, and PERFECT and CLEAR, each
+ * only when it applies.
+ */
+int fx_label_lines(const Fx *fx, char lines[][FX_LABEL_LINE_SIZE], int max_lines);
 
 /* Current screen shake offset in board cells. Both are 0 when the shake is idle. */
 void fx_shake_offset(const Fx *fx, float *out_x, float *out_y);

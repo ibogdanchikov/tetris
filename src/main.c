@@ -499,7 +499,7 @@ static void app_draw(App *app, float alpha, double now)
         board_view_draw(&app->renderer, &layout, &app->game, alpha,
                         fx_level_pulse_amount(&app->fx));
         fx_view_draw(&app->renderer, &layout, &app->fx);
-        hud_draw(&app->renderer, &layout, &app->game);
+        hud_draw(&app->renderer, &layout, &app->game, &app->fx);
     }
     const MenuViewState view = { &app->menu, &app->save.settings, &app->save, &app->game,
                                  app_input_key_name, time_seconds };

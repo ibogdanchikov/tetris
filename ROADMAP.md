@@ -49,11 +49,20 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - `--play` starts a run without the title, so smoke tests and screenshots of the board keep working.
 - Save file parser, serializer, binding and score table tests in `tests/test_save.c`.
 
+### Milestone 6: "Add T-spins, back-to-back, combos and perfect clears"
+
+- T-spin detection with the 3-corner rule in `game_tspin_kind`, with minis and the fifth-kick upgrade. A hard drop in place keeps the spin; any movement after the rotation ends it.
+- A scoring table by T-spin kind and line count, back-to-back (1.5 times the line points), combos (50 per step) and perfect clear bonuses, all multiplied by the level before the clear.
+- `GameState.last_clear` records what each lock scored; `back_to_back` and `clear_streak` carry the state across locks.
+- A clear label in the left panel under the stats, kept and faded by `src/fx`, sized to fit the panel at every window size.
+- `tests/test_scoring.c` covers the rule corner by corner, a T-spin double made by a real rotation, minis, back-to-back, combos, perfect clears, the label text and fade, and replay determinism with spins.
+
 ## Current status
 
 ### What works
 
 - The full game loop: spawn, gravity, soft and hard drop, SRS rotation with kicks, hold, next queue, lock delay, line clears, scoring and levels.
+- T-spins and mini T-spins, back-to-back bonuses, combos and perfect clears, with a fading label that names each notable clear.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
 - A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
@@ -66,11 +75,13 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - `ctest --preset debug`, `ctest --preset release` and `ctest --preset debug-sanitizers` all pass. Each runs the single `tetris_tests` executable.
 - `./build/debug/tetris --frames 2 --screenshot /tmp/opencode/tetris-check.bmp` opened a window and wrote an 800x600 BMP. The log reported an OpenGL 4.6 core context on Mesa Intel Iris Xe and a real audio device opened through PipeWire (`Built-in Audio Analog Stereo`, 48 kHz mono float stream to a 2-channel device).
 - The screenshot showed the playfield, the HOLD and NEXT panels, the score/level/lines readout and the shader-drawn background.
-- The tests cover the pure core, layout and font math, the input buffer, the effects layer, the audio synth/mixer/event mapping and the save file format. They do not link SDL or OpenGL.
+- The tests cover the pure core, layout and font math, the input buffer, the effects layer, the audio synth/mixer/event mapping, the save file format and the Milestone 6 scoring. They do not link SDL or OpenGL.
+- Each Milestone 6 rule was broken on purpose in a scratch copy (front corners ignored, no fifth-kick upgrade, a hard drop that always ends the spin), and the scoring suite failed every time. The clear label was drawn with all seven lines at 352x352, 800x600 and 1600x1000, forced onto the screen from a throwaway copy of `main.c`; it stayed inside the left panel at all three sizes.
 - Milestone 5 was checked with screenshots of every screen at 800x600: title, main menu, settings, controls (including the key prompt), high scores, pause and game over. The menus were driven by key events pushed with `SDL_PushEvent` from a throwaway copy of `main.c`, with `XDG_DATA_HOME` pointed at a scratch directory. Those runs changed the volume and DAS, rebound a key, played runs to game over, and then checked that `save.txt` held the changes and that the next start showed the best score. A save file of random bytes logged one warning and started with the defaults. `packaging/linux/build.sh` still builds and tests the release binary.
 
 ### Not verified on this machine
 
+- A T-spin, a perfect clear or a combo made in a real game by a person. The rules are unit tested and the label was drawn on screen, but nobody has played one here.
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here.
 - Windows and macOS builds.
@@ -79,7 +90,6 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ### Known limitations
 
-- No T-spin, mini T-spin, back-to-back, combo or perfect-clear scoring. `last_kick_index` and `last_action_was_rotation` are recorded but not used by the rules yet.
 - No text beyond the built-in 5x7 font. It covers space, A-Z, 0-9 and `: . - ! ? < >`; lowercase uses the uppercase glyph and other characters are skipped, so a key name such as `[` shows as a gap on the controls screen.
 - No music. Mute (`M`) is not saved; only the volume is.
 - No player names in the score table, and no way to clear it short of deleting `save.txt`.
@@ -97,34 +107,6 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - A screenshot is uncompressed BMP. At 800x600 it is about 1.9 MB.
 
 ## Planned milestones
-
-### Milestone 6: scoring extras
-
-**Goal:** add the standard modern scoring events that the current rules omit.
-
-**Scope**
-
-- T-spin detection with the 3-corner rule, using `last_action_was_rotation`, `last_kick_index` and the four corners around the T center.
-- Mini T-spins.
-- Back-to-back bonuses.
-- Combos.
-- Perfect clears.
-- On-screen labels for these clears.
-
-**Design notes**
-
-- Detect at lock time in `game_lock_piece`, before the rows are removed, and store the result on `GameState` (for example a `last_clear_kind` field). Presentation should read the result, not recompute it.
-- The 3-corner rule: at least three of the four diagonal corners around the T center are occupied or outside the board. A mini is the case where the two corners in front of the T are not both filled; some rule sets also require the last kick to be the fifth entry. Put the exact rule in one function and test it directly.
-- Add event bits only where the HUD needs a one-shot trigger. Back-to-back and combo counters are state, not events.
-- Score with a table, not a chain of `if`s. Keep the level multiplier behavior: points use the level in force before the clear.
-- Perfect clear means the board is empty after the rows are removed. Check it after the removal, not at the lock.
-- Labels fit the current font: `T-SPIN`, `B2B`, `COMBO` and `PERFECT CLEAR` use only supported characters.
-
-**Done when**
-
-- Known T-spin, mini, B2B, combo and perfect-clear setups score correctly and have tests.
-- The HUD shows the right label for each clear, and the label does not overlap the board at small window sizes.
-- Replay determinism still holds: the same seed and inputs produce the same score and the same labels.
 
 ### Milestone 7: presentation polish
 

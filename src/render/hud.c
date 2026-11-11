@@ -16,9 +16,14 @@ static const Color HUD_LABEL_COLOR = { 0.45f, 0.85f, 1.00f, 1.00f };
 static const Color HUD_LABEL_GLOW = { 0.20f, 0.78f, 1.00f, 0.45f };
 static const Color HUD_VALUE_COLOR = { 0.92f, 0.97f, 1.00f, 1.00f };
 static const Color HUD_VALUE_GLOW = { 0.20f, 0.78f, 1.00f, 0.35f };
+static const Color HUD_CLEAR_COLOR = { 1.00f, 0.55f, 0.90f, 1.00f };
+static const Color HUD_CLEAR_GLOW = { 1.00f, 0.25f, 0.80f, 0.60f };
 
 /* Empty text pixels between a stat label and its value. */
 #define HUD_STAT_VALUE_GAP_PIXELS 3
+
+/* Empty text pixels between two lines of the clear label. */
+#define HUD_CLEAR_LINE_GAP_PIXELS 3
 
 /* Brightness of the grey used for a hold piece that is spent until the next lock. */
 #define HUD_HOLD_GREY_FACTOR 0.75f
@@ -106,7 +111,8 @@ static void hud_draw_stat(Renderer *renderer, const BoardLayout *layout, float x
               HUD_VALUE_COLOR, HUD_VALUE_GLOW, value);
 }
 
-static void hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const GameState *game)
+/* Draws the stats and returns how far down they reach, in framebuffer pixels. */
+static float hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const GameState *game)
 {
     char score[16];
     char level[16];
@@ -128,11 +134,63 @@ static void hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const 
     hud_draw_stat(renderer, layout, x, top, "LEVEL", level);
     top -= stride;
     hud_draw_stat(renderer, layout, x, top, "LINES", lines);
+    return top - stride + (float)layout->cell_size;
 }
 
-void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game)
+/*
+ * The label of a notable clear, centered in the left panel between the stats
+ * and the bottom of the panel. The glyph size is the largest at which every
+ * line fits that space, so it shrinks with the window instead of spilling onto
+ * the board.
+ */
+static void hud_draw_clear_label(Renderer *renderer, const BoardLayout *layout, const Fx *fx,
+                                 float stats_bottom)
+{
+    char lines[FX_LABEL_MAX_LINES][FX_LABEL_LINE_SIZE];
+    const int count = fx_label_lines(fx, lines, FX_LABEL_MAX_LINES);
+    const float alpha = fx_label_alpha(fx);
+    if (count == 0 || alpha <= 0.0f) {
+        return;
+    }
+
+    const float pad = (float)hud_padding(layout);
+    const float top = stats_bottom - (float)layout->cell_size * 0.5f;
+    const float bottom = layout->stats_area.y + pad;
+    const int width = (int)(layout->stats_area.w - 2.0f * pad);
+
+    int widest = 1;
+    for (int i = 0; i < count; ++i) {
+        const int length = (int)strlen(lines[i]);
+        widest = length > widest ? length : widest;
+    }
+
+    int pixel = board_layout_fit_text_pixel(width, widest, layout->text_pixel);
+    for (; pixel > 1; --pixel) {
+        const int height = count * FONT_GLYPH_H * pixel +
+                           (count - 1) * HUD_CLEAR_LINE_GAP_PIXELS * pixel;
+        if ((float)height <= top - bottom) {
+            break;
+        }
+    }
+
+    Color color = HUD_CLEAR_COLOR;
+    Color glow = HUD_CLEAR_GLOW;
+    color.a *= alpha;
+    glow.a *= alpha;
+    const float line_h = (float)(FONT_GLYPH_H * pixel);
+    float y = top - line_h;
+    for (int i = 0; i < count; ++i) {
+        text_draw_centered(renderer, layout->stats_area.x, y, layout->stats_area.w, line_h, pixel,
+                           color, glow, lines[i]);
+        y -= line_h + (float)(HUD_CLEAR_LINE_GAP_PIXELS * pixel);
+    }
+}
+
+void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
+              const Fx *fx)
 {
     hud_draw_hold(renderer, layout, game);
     hud_draw_next(renderer, layout, game);
-    hud_draw_stats(renderer, layout, game);
+    const float stats_bottom = hud_draw_stats(renderer, layout, game);
+    hud_draw_clear_label(renderer, layout, fx, stats_bottom);
 }

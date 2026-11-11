@@ -1,5 +1,6 @@
 #include "fx/fx.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "core/piece.h"
@@ -320,8 +321,19 @@ void fx_set_intensity(Fx *fx, float intensity)
     fx->intensity = fx_clamp01(intensity);
 }
 
+/* A clear worth a label: anything beyond a plain single, double or triple. */
+static bool fx_clear_is_notable(const GameClearResult *clear)
+{
+    return clear->tspin != GAME_TSPIN_NONE || clear->lines >= 4 || clear->back_to_back ||
+           clear->combo > 0 || clear->perfect_clear;
+}
+
 void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game)
 {
+    if ((frame_events & GAME_EVENT_LOCK) != 0 && fx_clear_is_notable(&game->last_clear)) {
+        fx->label.clear = game->last_clear;
+        fx->label.life = FX_LABEL_SECONDS;
+    }
     if ((frame_events & GAME_EVENT_HARD_DROP) != 0) {
         fx_spawn_hard_drop_effects(fx, game);
     }
@@ -338,6 +350,12 @@ void fx_on_events(Fx *fx, uint32_t frame_events, const GameState *game)
 
 void fx_update(Fx *fx, float dt)
 {
+    if (dt > 0.0f && fx->label.life > 0.0f) {
+        fx->label.life -= dt > FX_MAX_DT ? FX_MAX_DT : dt;
+        if (fx->label.life < 0.0f) {
+            fx->label.life = 0.0f;
+        }
+    }
     if (dt <= 0.0f) {
         return;
     }
@@ -429,6 +447,59 @@ float fx_lock_flash_amount(const Fx *fx)
 float fx_level_pulse_amount(const Fx *fx)
 {
     return fx_clamp01(fx->level_pulse / FX_LEVEL_PULSE_SECONDS) * fx->intensity;
+}
+
+float fx_label_alpha(const Fx *fx)
+{
+    if (fx->label.life <= 0.0f) {
+        return 0.0f;
+    }
+    return fx_clamp01(fx->label.life / FX_LABEL_FADE_SECONDS);
+}
+
+static int fx_label_add(char lines[][FX_LABEL_LINE_SIZE], int count, int max_lines,
+                        const char *text)
+{
+    if (count >= max_lines) {
+        return count;
+    }
+    snprintf(lines[count], FX_LABEL_LINE_SIZE, "%s", text);
+    return count + 1;
+}
+
+int fx_label_lines(const Fx *fx, char lines[][FX_LABEL_LINE_SIZE], int max_lines)
+{
+    if (fx->label.life <= 0.0f) {
+        return 0;
+    }
+
+    static const char *const CLEAR_NAMES[5] = { "", "SINGLE", "DOUBLE", "TRIPLE", "QUAD" };
+    const GameClearResult *clear = &fx->label.clear;
+    int count = 0;
+
+    if (clear->back_to_back) {
+        count = fx_label_add(lines, count, max_lines, "B2B");
+    }
+    if (clear->tspin == GAME_TSPIN_MINI) {
+        count = fx_label_add(lines, count, max_lines, "MINI");
+    }
+    if (clear->tspin != GAME_TSPIN_NONE) {
+        count = fx_label_add(lines, count, max_lines, "T-SPIN");
+    }
+    if (clear->lines > 0) {
+        const int name = clear->lines > 4 ? 4 : clear->lines;
+        count = fx_label_add(lines, count, max_lines, CLEAR_NAMES[name]);
+    }
+    if (clear->combo > 0) {
+        char combo[FX_LABEL_LINE_SIZE];
+        snprintf(combo, sizeof combo, "COMBO %u", (unsigned)clear->combo);
+        count = fx_label_add(lines, count, max_lines, combo);
+    }
+    if (clear->perfect_clear) {
+        count = fx_label_add(lines, count, max_lines, "PERFECT");
+        count = fx_label_add(lines, count, max_lines, "CLEAR");
+    }
+    return count;
 }
 
 void fx_shake_offset(const Fx *fx, float *out_x, float *out_y)

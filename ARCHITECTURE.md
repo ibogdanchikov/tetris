@@ -50,6 +50,8 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Y is up everywhere.** Board row 0 is the bottom row. The renderer's pixel origin is the bottom-left corner of the framebuffer. Effect positions are board cells, so `fx_view` scales them with the layout. The SRS piece tables and the wall-kick tables use the same y-up convention; the tests pin the orientation with concrete cases and with a reversibility check.
 
+**Scoring is a table, decided at the lock.** `game_lock_piece` asks `game_tspin_kind` for the T-spin kind before anything else, then `game_score_lock` looks the points up by T-spin kind and line count, applies the back-to-back factor to the line points, adds the combo and the perfect clear bonus, and multiplies everything by the level in force before the clear. The result goes into `GameState.last_clear`, so presentation shows the clear without working it out again. A perfect clear is decided on the lock tick too, by checking that every row that is not full is empty: that is the board as it will be once the clear delay removes the rows, and it keeps all scoring in one place. `back_to_back` and `clear_streak` are state across locks, not events.
+
 **Rotation is SRS.** `game_kick_offsets` returns the offsets for one `(from, to)` pair: five entries for I and the 3x3 pieces, one identity entry for O. `game_try_rotate` tries them in order and records the successful index in `last_kick_index`. `tests/test_rules.c` checks that every forward kick list is the negation of the reverse list, plus the cases that would flip if y were down: a vertical I at the left wall lands flat at columns 0-3, a flat I on the floor climbs two rows, and a T under an overhang rotates down two rows.
 
 **Randomness is a 7-bag.** `Bag` holds one permutation of the seven pieces. `bag_next` deals from it and reshuffles when it is empty. The generator state is a single `uint64_t` in `GameState.rng_state`, so a state snapshot is enough to replay a run.
@@ -72,7 +74,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 | `tetris_audio` | `src/app/sound_map.c`, `src/audio/mix.c`, `src/audio/synth.c` | Event-to-sound mapping, voice mixing and synthesis. | `tetris_core` | SDL, allocation, libm |
 | `tetris_app` | `src/app/save.c`, `src/app/menu.c` | Settings, key bindings, the score table, the save text format and the screen state machine. | `tetris_core`, C standard headers (`stdio.h` for `snprintf`) | SDL, GL, file I/O, allocation |
 | `tetris` | `src/main.c`, `src/app/input_sdl.c`, `src/app/save_file.c`, `src/app/screenshot.c`, `src/audio/audio.c`, `src/platform/platform.c`, `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c`, `src/render/menu_view.c`, `src/render/renderer.c`, `src/render/shader.c`, `src/render/text.c`, generated `builtin_shaders.c` | Window, GL context, SDL audio, input mapping, the save file, rendering and the frame loop. | Everything above, `glad`, `SDL3::SDL3` | Nothing forbidden; this is the top layer |
-| `tetris_tests` | `tests/test_main.c`, `tests/test_piece.c`, `tests/test_game.c`, `tests/test_rules.c`, `tests/test_input_buffer.c`, `tests/test_font.c`, `tests/test_fx.c`, `tests/test_audio.c`, `tests/test_save.c` | One assert-style test executable. | `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout`, `tetris_app` | SDL, GL |
+| `tetris_tests` | `tests/test_main.c`, `tests/test_piece.c`, `tests/test_game.c`, `tests/test_rules.c`, `tests/test_input_buffer.c`, `tests/test_font.c`, `tests/test_fx.c`, `tests/test_audio.c`, `tests/test_save.c`, `tests/test_scoring.c` | One assert-style test executable. | `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout`, `tetris_app` | SDL, GL |
 
 `src/render/text.c` is in the executable, not in `tetris_view_layout`, because it draws through `Renderer`. `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c` and `src/render/menu_view.c` are also executable code: they need GL, even though their layout inputs are pure.
 
@@ -88,6 +90,13 @@ void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level);
 void game_set_shift_timing(GameState *game, uint16_t das_ticks, uint16_t arr_ticks);
 void game_step(GameState *game, const GameInput *input);
 ```
+
+```c
+GameTSpin game_tspin_kind(const Board *board, const ActivePiece *piece,
+                          bool last_action_was_rotation, int last_kick_index);
+```
+
+`game_tspin_kind` is the whole T-spin rule in one function, so the tests check it directly: a T whose last movement was a rotation, three of the four corners around its center filled or outside the board, full when both front corners are among them or the rotation took the fifth kick, mini otherwise.
 
 `game_init_with_config` seeds the generator, fills the bag and the next queue, and spawns the first piece at the config's start level (0 is treated as 1) with its DAS and ARR. `game_init` and `game_init_at_level` are wrappers with the default config (level 1, `GAME_DAS_TICKS`, `GAME_ARR_TICKS`). `game_set_shift_timing` changes DAS and ARR mid-run for a settings change from the pause menu. ARR 0 means a repeat moves the piece as far as it goes. `game_step` advances exactly one tick; during play it is the only per-tick entry point that changes the rules state.
 
@@ -122,6 +131,8 @@ typedef struct GameInput {
 | `piece_serial` | Incremented on every spawn; renderers can use it to detect a new piece. |
 | `tick`, `events`, `game_over`, `game_over_reason` | `events` is cleared at the start of each tick and must be OR-ed across a multi-tick frame. |
 | `das_ticks`, `arr_ticks` | The run's shift timing, from `GameConfig`. |
+| `last_clear` | What the most recent lock scored: lines, T-spin kind, back-to-back, perfect clear, combo step and points. Set on every `GAME_EVENT_LOCK` tick. |
+| `back_to_back`, `clear_streak` | Scoring state across locks: whether the last line clear was a difficult one, and how many locks in a row cleared lines. |
 
 `game_step` order inside one tick: clear events; return early on game over; run the clear-delay phase if clearing; hold on a press; reset `gravity_accum` on a soft-drop press; rotation with kicks (CW and CCW in the same tick cancel); horizontal movement with DAS/ARR; hard drop (fall to the ghost row, score, lock, done); gravity or soft drop; note the lowest row, update `grounded`, run the lock counter and maybe lock; increment `tick`. The order is documented on `game_step` in `src/core/game.h`; the soft-drop accumulator reset is an extra step that happens between hold and rotation.
 
@@ -192,12 +203,13 @@ void renderer_shutdown(Renderer *renderer);
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
                      float alpha, float frame_pulse);
 void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx);
-void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game);
+void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
+              const Fx *fx);
 void menu_view_draw(Renderer *renderer, const BoardLayout *layout, const MenuViewState *state);
 bool menu_view_hides_game(const Menu *menu);
 ```
 
-Draw order is board, effects, HUD, menu. The title, main menu, high scores, settings and controls cover the whole group with a neon panel, and `menu_view_hides_game` tells `main.c` to skip the board, effects and HUD under them. The pause and game-over menus dim the playfield and leave the HUD visible. Key names on the controls screen come from `app_input_key_name` through a callback in `MenuViewState`, so the view needs no input code. `board_view_draw` draws the neon frame, the grid, the glow of the locked cells and the cells themselves, then either the clear animation while the phase is clearing or, with additive blending, the drop beam, the ghost and the halo, followed by the active piece with alpha blending. `fx_view_draw` draws the lock flash, trails and particles; it switches to additive blending for the trails and particles and restores alpha before returning. `hud_draw` draws the hold and next panels with the same neon frame (`board_view_draw_neon_frame`) and the stats; `text_draw` adds the glow behind the letters in an additive pass of its own.
+Draw order is board, effects, HUD, menu. The title, main menu, high scores, settings and controls cover the whole group with a neon panel, and `menu_view_hides_game` tells `main.c` to skip the board, effects and HUD under them. The pause and game-over menus dim the playfield and leave the HUD visible. Key names on the controls screen come from `app_input_key_name` through a callback in `MenuViewState`, so the view needs no input code. `board_view_draw` draws the neon frame, the grid, the glow of the locked cells and the cells themselves, then either the clear animation while the phase is clearing or, with additive blending, the drop beam, the ghost and the halo, followed by the active piece with alpha blending. `fx_view_draw` draws the lock flash, trails and particles; it switches to additive blending for the trails and particles and restores alpha before returning. `hud_draw` draws the hold and next panels with the same neon frame (`board_view_draw_neon_frame`), the stats and the clear label from `fx_label_lines`, which it fits into the left panel under the stats; `text_draw` adds the glow behind the letters in an additive pass of its own.
 
 ### Effects
 
@@ -211,7 +223,7 @@ void fx_shake_offset(const Fx *fx, float *out_x, float *out_y);
 void fx_clear_visual(float progress, FxClearVisual *out);
 ```
 
-`fx_on_events` consumes the frame's OR-ed event bits and the game snapshots. `fx_set_intensity` (0 to 1, kept by `fx_reset`) scales the particle counts per cell, the shake, the lock flash, the trails and the level-up pulse; at 1 everything is exactly as tuned, at 0 none of it happens. The line-clear animation is not scaled. `fx_update` advances timers and particles by `dt`, clamped to `FX_MAX_DT` (0.1 s). `fx_shake_offset` returns the current shake in board cells. `fx_clear_visual` maps normalized clear progress to the flash amount and per-column visibility used by `board_view`.
+`fx_on_events` consumes the frame's OR-ed event bits and the game snapshots. On a lock whose `last_clear` is notable (a T-spin, four lines, back-to-back, a combo or a perfect clear) it also keeps a copy for the clear label; `fx_label_lines` turns it into text and `fx_label_alpha` fades it. `fx_set_intensity` (0 to 1, kept by `fx_reset`) scales the particle counts per cell, the shake, the lock flash, the trails and the level-up pulse; at 1 everything is exactly as tuned, at 0 none of it happens. The line-clear animation and the clear label are not scaled: they tell the player what happened. `fx_update` advances timers and particles by `dt`, clamped to `FX_MAX_DT` (0.1 s). `fx_shake_offset` returns the current shake in board cells. `fx_clear_visual` maps normalized clear progress to the flash amount and per-column visibility used by `board_view`.
 
 ### Audio
 
@@ -307,7 +319,7 @@ One iteration of the loop in `main.c`:
 1. Put constants and any new `GameState` fields in `src/core/game.h`, with the tick unit and the valid range in the comment.
 2. Implement it in `src/core/game.c` inside `game_step` or a `static` helper. Keep it integer and free of SDL, GL and allocation.
 3. Add a `GAME_EVENT_*` bit only if presentation needs to react; otherwise the view can read the state.
-4. Add tests to `tests/test_game.c` or `tests/test_rules.c`, including the boundary and the replay-determinism case.
+4. Add tests to `tests/test_game.c`, `tests/test_rules.c` or `tests/test_scoring.c`, including the boundary and the replay-determinism case.
 
 ## Build and tooling
 

@@ -71,6 +71,11 @@ menu with its place in the table. The settings cover the volume, the effects
 intensity, DAS, ARR and the key bindings. They and the top ten scores are saved
 to a small text file in the user's data directory.
 
+**Milestone 6** adds the modern scoring extras: T-spins by the 3-corner rule,
+mini T-spins, back-to-back bonuses, combos and perfect clears, scored from a
+table. A label in the left panel names a notable clear (for example **B2B**,
+**T-SPIN**, **DOUBLE**, **COMBO 2**) and fades out after a moment.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -246,6 +251,12 @@ each side:
   drop. Below it are **SCORE**, **LEVEL** and **LINES**, labels above
   left-aligned values.
 - **NEXT** on the right, the next three pieces stacked top to bottom.
+- A **clear label** in pink under **LINES** after a notable clear: a T-spin, a
+  four-line clear, a back-to-back bonus, a combo or a perfect clear. It lists
+  what applies, one line each: **B2B**, **MINI**, **T-SPIN**, the clear
+  (**SINGLE**, **DOUBLE**, **TRIPLE** or **QUAD**), **COMBO n**, and **PERFECT
+  CLEAR**. It stays up 1.6 seconds and fades over the last 0.4. Its text shrinks
+  until every line fits the panel, so it never covers the board.
 
 Preview pieces use three quarters of the board cell size, so a flat I keeps about
 half a cell of padding inside its four-cell box instead of touching the frame.
@@ -297,7 +308,7 @@ device is logged with its driver, name, format and rate.
 - **Rotation** uses SRS. A rotation that does not fit in place tries the five
   standard wall kicks for that rotation, and is rejected only if none of them
   fits. O has no kicks. The index of the kick that was used is kept in
-  `last_kick_index`; T-spin detection is future work.
+  `last_kick_index` for T-spin detection.
 - **Hold** swaps the active piece with the hold slot. The first hold takes the
   front of the next queue, later ones swap. The incoming piece spawns like a
   fresh piece, and hold is spent until the next piece locks.
@@ -312,8 +323,29 @@ device is logged with its driver, name, format and rate.
   Descending into a row the piece has not been in before refreshes both the
   timer and the reset budget; sliding or spinning off the ground without
   reaching a new row does not.
-- **Scoring** is 100 / 300 / 500 / 800 for a single / double / triple / tetris,
-  multiplied by the level in force *before* the clear. Soft drop adds 1 per row,
+- **T-spins** use the 3-corner rule. A T locks as a T-spin when the last thing
+  that moved it was a rotation and at least three of the four cells diagonal to
+  its center are filled or outside the board. It is a full T-spin when both
+  corners on the side the T points to are filled, or when the rotation needed
+  the fifth (last) wall kick; otherwise it is a mini. A shift, a row of gravity
+  or soft drop, or a hard drop that falls at least one row ends the spin; a hard
+  drop in place keeps it.
+- **Scoring** is a table, multiplied by the level in force *before* the clear:
+
+  | Lines | Plain | Mini T-spin | T-spin | Perfect clear bonus |
+  | --- | --- | --- | --- | --- |
+  | 0 | 0 | 100 | 400 | - |
+  | 1 | 100 | 200 | 800 | 800 |
+  | 2 | 300 | 400 | 1200 | 1200 |
+  | 3 | 500 | - | 1600 | 1800 |
+  | 4 | 800 | - | - | 2000 (3200 back-to-back) |
+
+  A four-line clear or a T-spin that clears lines is *difficult*. A difficult
+  clear right after another one gets its line points times 1.5 (back-to-back).
+  Any other line clear breaks that chain; a lock that clears nothing does not.
+  Every clearing lock in a row after the first adds a combo of 50 per step, and
+  a lock that clears nothing ends the combo. A perfect clear (the board is
+  empty once the rows are gone) adds its bonus on top. Soft drop adds 1 per row,
   hard drop 2 per row.
 - **Line clear delay**: the score, line count and event happen at the lock, but
   the full rows stay on the board for `GAME_LINE_CLEAR_DELAY_TICKS` (24) ticks.
@@ -330,8 +362,6 @@ device is logged with its driver, name, format and rate.
 - **Game over** is a block out (the new piece cannot spawn) or a lock out (a
   piece locks with every cell in the hidden buffer rows). A game that is over
   only advances the tick counter.
-- T-spins, back-to-back bonuses, combos and perfect clears are not implemented
-  yet.
 
 ### Command line flags
 
@@ -379,7 +409,11 @@ finite samples, click-free ends and determinism, the short-capacity path, the
 mixer (silence, gains, voices ending mid-block, the soft clip, the master ramp)
 and the event-to-sound precedence. The save suite runs the save file parser and
 serializer on strings: a round trip, missing, corrupt and unknown-version files,
-clamped and malformed values, key bindings and the score table. They are a plain
+clamped and malformed values, key bindings and the score table. The scoring
+suite checks the T-spin rule corner by corner, a real T-spin double from a
+rotation, minis and the fifth-kick upgrade, losing a spin by dropping,
+back-to-back, combos, perfect clears, the clear label text and its fade, and
+that a run with spins replays exactly. They are a plain
 assert-style harness — no external framework — and they never link SDL or
 OpenGL.
 
@@ -398,10 +432,10 @@ src/core/                   pure game logic: no SDL, no GL, no malloc, no clock
   piece.h/.c                SRS tetromino shapes, four rotations each, y-up offsets
   bag.h/.c                  7-bag randomiser over the game's rng state
   input.h                   held/pressed actions for one tick
-  game.h/.c                 GameState, game_init, game_step (kicks, hold, gravity, lock delay, scoring)
+  game.h/.c                 GameState, game_init, game_step (kicks, hold, gravity, lock delay, T-spins, scoring)
   rng.h/.c                  splitmix64, state is a single uint64_t
 src/fx/                     presentation effects: no SDL, no GL, no malloc, no clock
-  fx.h/.c                   particle pool, effect timers, screen shake, clear-animation maths
+  fx.h/.c                   particle pool, effect timers, screen shake, clear-animation maths, clear label
 src/audio/                  sound: synthesis and playback
   synth.h/.c                note tables, waveforms, envelopes, sound lengths (SDL-free, tested)
   mix.h/.c                  voice mixing, master ramp and the soft clip (SDL-free, tested)
@@ -417,7 +451,7 @@ src/render/                 GL rendering
   text.h/.c                 draws strings as merged pixel-run rectangles
   board_view.h/.c           playfield, ghost, drop beam, active piece and its halo, and the clear animation
   fx_view.h/.c              lock flash, hard-drop trails and additive glow particles
-  hud.h/.c                  hold, next and stats
+  hud.h/.c                  hold, next, stats and the clear label
   menu_view.h/.c            title, menus, settings, controls and high-score screens
 src/app/                    the one place GL and SDL meet outside platform
   screenshot.h/.c           glReadPixels -> flipped rows -> SDL BMP
@@ -437,6 +471,7 @@ tests/test_input_buffer.c   input buffer suite plus a tap-through-game_step chec
 tests/test_fx.c             particle, event-mapping, shake and clear-animation suites
 tests/test_audio.c          synthesis, mixing and event-to-sound precedence suites
 tests/test_save.c           save file parser, serializer, bindings and score table suites
+tests/test_scoring.c        T-spin rule, back-to-back, combo, perfect clear and clear label suites
 ```
 
 Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
@@ -529,9 +564,7 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
 
 ## Future work
 
-- T-spins, back-to-back bonuses, combos and perfect clears in the core.
-- Menus, a start-level picker and a persistent high-score table.
-- Music, a volume setting and an audio-device picker.
+- Music and an audio-device picker.
 - Saving a run or recording a replay.
 - Real font rendering (a texture atlas) once the HUD needs more characters or
   smoother type; the rectangle font is deliberate for now.

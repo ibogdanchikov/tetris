@@ -198,6 +198,7 @@ add_executable(tetris_tests
     tests/test_piece.c
     tests/test_rules.c
     tests/test_save.c
+    tests/test_scoring.c
 )
 target_link_libraries(tetris_tests PRIVATE tetris_core tetris_fx tetris_input tetris_audio
                                           tetris_view_layout tetris_app)

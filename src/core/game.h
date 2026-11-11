@@ -92,6 +92,42 @@ typedef enum GameEvent {
     GAME_EVENT_CLEAR_DONE = 1u << 11, /* the delayed rows are gone, next piece spawned */
 } GameEvent;
 
+/*
+ * What kind of T-spin a lock was, by the 3-corner rule (see game_tspin_kind).
+ * Every other piece, and a T that did not end on a rotation, is NONE.
+ */
+typedef enum GameTSpin {
+    GAME_TSPIN_NONE = 0,
+    GAME_TSPIN_MINI,
+    GAME_TSPIN_FULL,
+} GameTSpin;
+
+/*
+ * Scoring extras, all before the level multiplier.
+ *
+ * A back-to-back clear (a four-line clear or a T-spin that clears lines, right
+ * after another one with no plain line clear in between) gets its line clear
+ * points times GAME_B2B_NUMERATOR / GAME_B2B_DENOMINATOR. A combo adds
+ * GAME_COMBO_POINTS for every clearing lock in a row after the first. A perfect
+ * clear adds its own table on top.
+ */
+#define GAME_B2B_NUMERATOR 3u
+#define GAME_B2B_DENOMINATOR 2u
+#define GAME_COMBO_POINTS 50u
+
+/*
+ * What the most recent lock scored, set on every GAME_EVENT_LOCK tick so
+ * presentation can show the clear without working it out again.
+ */
+typedef struct GameClearResult {
+    uint8_t lines;        /* rows the lock completed, the same as last_clear_count */
+    uint8_t tspin;        /* GameTSpin */
+    bool back_to_back;    /* the clear got the back-to-back bonus */
+    bool perfect_clear;   /* the board is empty once the rows are removed */
+    uint16_t combo;       /* 0 = no combo; n = the n-th clearing lock in a row after the first */
+    uint32_t points;      /* what the lock scored, level included; drop points are not in it */
+} GameClearResult;
+
 /* The falling piece. x, y is the bottom-left corner of its SRS bounding box. */
 typedef struct ActivePiece {
     PieceType type;
@@ -141,9 +177,25 @@ typedef struct GameState {
     PieceType hold_piece;
     bool hold_used; /* a hold is spent until the next piece locks */
 
-    /* Rotation bookkeeping, kept for T-spin detection in a later milestone. */
+    /*
+     * Rotation bookkeeping for T-spin detection. last_action_was_rotation is
+     * true when the latest thing that moved the piece was a rotation: a shift,
+     * a gravity or soft-drop row and a hard drop that falls at least one row
+     * all clear it.
+     */
     int8_t last_kick_index;      /* 0 = no offset, 1..4 = kick table entry */
     bool last_action_was_rotation;
+
+    /*
+     * Scoring state across locks. back_to_back is armed by a four-line clear
+     * or a T-spin that clears lines, and dropped by any other line clear; a
+     * lock that clears nothing leaves it alone. clear_streak counts the locks
+     * in a row that cleared lines and goes back to 0 on a lock that clears
+     * nothing.
+     */
+    bool back_to_back;
+    uint16_t clear_streak;
+    GameClearResult last_clear;
 
     /*
      * Where the tick is: falling or counting out a line clear. While clearing
@@ -272,6 +324,17 @@ uint16_t game_clear_progress(const GameState *game);
 
 /* Absolute board cells of the active piece. */
 void game_piece_cells(const ActivePiece *piece, int out_x[4], int out_y[4]);
+
+/*
+ * The T-spin rule, for a piece about to lock on this board. It is a T-spin only
+ * when the piece is a T and the last thing that moved it was a rotation, and
+ * at least three of the four cells diagonal to its center are filled or
+ * outside the board. It is a full T-spin when both corners on the side the T
+ * points to are among them, or when the rotation needed the fifth kick
+ * (last_kick_index 4); otherwise it is a mini.
+ */
+GameTSpin game_tspin_kind(const Board *board, const ActivePiece *piece,
+                          bool last_action_was_rotation, int last_kick_index);
 
 /*
  * Gravity increment for a level, in 1/65536 of a row per tick, taken from a

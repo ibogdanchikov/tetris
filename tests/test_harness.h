@@ -35,7 +35,7 @@ extern int test_failures;
 
 /* Suites defined in tests/test_piece.c, tests/test_game.c, tests/test_rules.c,
    tests/test_input_buffer.c, tests/test_font.c, tests/test_fx.c,
-   tests/test_audio.c and tests/test_save.c. */
+   tests/test_audio.c, tests/test_save.c and tests/test_scoring.c. */
 void test_piece_suite(void);
 void test_game_suite(void);
 void test_rules_suite(void);
@@ -44,3 +44,4 @@ void test_font_suite(void);
 void test_fx_suite(void);
 void test_audio_suite(void);
 void test_save_suite(void);
+void test_scoring_suite(void);
