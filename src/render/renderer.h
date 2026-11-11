@@ -55,13 +55,14 @@ typedef struct Renderer {
     int capacity;
     int count;
     RenderBlend blend;
-    char shader_dir[1024]; /* kept so F5 can reload from the same place */
+    char shader_dir[1024]; /* kept so F5 can reload from the same place; "" = built in */
     float *instances; /* capacity * RENDERER_INSTANCE_FLOATS floats */
 } Renderer;
 
 /*
  * Creates the shader programs (shader_dir must contain quad.vert, quad.frag,
- * background.vert and background.frag) and the instanced quad geometry. The
+ * background.vert and background.frag; NULL uses the copies built into the
+ * executable) and the instanced quad geometry. The
  * quad program is required and a failure is fatal; the background program is
  * optional, so a broken background only logs and leaves the flat clear colour.
  * Returns false on any fatal failure.
@@ -110,7 +111,7 @@ void renderer_clear_clip(Renderer *renderer);
 void renderer_set_blend(Renderer *renderer, RenderBlend blend);
 
 /*
- * Recompiles every shader program from shader_dir. A program that fails to
+ * Recompiles every shader program from shader_dir (or the built-in copies). A program that fails to
  * compile or link is logged and the old one stays in use, so a typo during
  * iteration never kills a running window. Returns whether the required quad
  * program reloaded.

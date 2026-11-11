@@ -4,6 +4,21 @@ A small falling-block puzzle game in C17 with SDL3, OpenGL 3.3 core and GLAD.
 
 See `ARCHITECTURE.md` for modules and design decisions, and `ROADMAP.md` for completed and planned milestones.
 
+## Download and play (Linux)
+
+Download the game as a single file, make it executable and run it:
+
+```sh
+curl -LO https://github.com/ibogdanchikov/tetris/releases/latest/download/tetris-linux-x86_64
+chmod +x tetris-linux-x86_64
+./tetris-linux-x86_64
+```
+
+Nothing else needs to be installed. The file is a 64-bit x86 executable with
+SDL3 and the shaders built in. It needs glibc 2.34 or newer (Ubuntu 22.04,
+Debian 12, Fedora 35 or later), an X11 or Wayland desktop and an OpenGL 3.3
+driver. The controls are listed under [Controls](#controls).
+
 **Milestone 1** is the skeleton only: a window, a GL context, an instanced quad
 renderer, a playfield view and a fixed-timestep loop.
 
@@ -80,7 +95,9 @@ The build produces `build/<preset>/tetris`. Assets are copied next to the
 executable as a post-build step, and shaders are loaded from
 `<SDL_GetBasePath()>/assets/shaders`, so the binary works from any working
 directory. `--assets DIR` loads them from `DIR/shaders` instead, which is what
-makes live shader editing convenient.
+makes live shader editing convenient. The shaders are also compiled into the
+executable (`cmake/embed_shaders.cmake`), and those built-in copies are used when
+there is no `assets/shaders` directory next to it.
 
 Useful cache options:
 
@@ -88,6 +105,28 @@ Useful cache options:
 | --- | --- | --- |
 | `TETRIS_WARNINGS_AS_ERRORS` | `OFF` | Turn the project's warning set into errors |
 | `TETRIS_ENABLE_SANITIZERS` | `OFF` | Build with ASan + UBSan |
+
+### Linux release binary
+
+```sh
+packaging/linux/build.sh
+```
+
+This builds `dist/tetris-linux-x86_64`, the file behind the download link above.
+It needs only Docker: the build runs in an Ubuntu 22.04 image
+(`packaging/linux/Dockerfile`) with SDL3 compiled as a static library, so the
+binary links nothing but glibc. SDL still opens X11, Wayland, OpenGL, PipeWire,
+PulseAudio and ALSA at run time with `dlopen`, so the player's own drivers are
+used. The script also runs the tests and prints the binary's shared libraries
+and the newest glibc version it needs.
+
+`.github/workflows/release.yml` runs the same script. Pushing a `v*` tag publishes
+the binary on a GitHub release:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## Run
 
@@ -229,7 +268,7 @@ device is logged with its driver, name, format and rate.
 | --- | --- |
 | `--frames N` | Render N frames, then exit (smoke tests, screenshots) |
 | `--screenshot PATH` | Write the last rendered frame to PATH as a BMP |
-| `--assets DIR` | Load shaders from `DIR/shaders` instead of next to the binary |
+| `--assets DIR` | Load shaders from `DIR/shaders` instead of next to the binary (or the built-in copies) |
 | `--size WxH` | Initial window size in pixels (default `800x600`) |
 | `--seed N` | Simulation seed (default `0x853c49e6748fea9b`) |
 | `--mute` | Start with the sound muted (`M` toggles it) |
@@ -271,8 +310,11 @@ external framework — and they never link SDL or OpenGL.
 ## Project layout
 
 ```
-CMakeLists.txt              build definition, targets, warnings, asset copy
+CMakeLists.txt              build definition, targets, warnings, asset copy, shader embedding
 CMakePresets.json           debug / release / debug-sanitizers presets
+cmake/embed_shaders.cmake   turns assets/shaders into a generated C file for the built-in copies
+packaging/linux/            Dockerfile and build.sh for the single-file Linux binary
+.github/workflows/release.yml  builds that binary and attaches it to a release on a v* tag
 assets/shaders/             quad.vert, quad.frag, background.vert, background.frag (GLSL 330 core)
 external/glad/              vendored GLAD2 loader (see its README)
 src/core/                   pure game logic: no SDL, no GL, no malloc, no clock
@@ -292,6 +334,7 @@ src/platform/               SDL3 window and GL context lifecycle
   platform.h/.c
 src/render/                 GL rendering
   shader.h/.c               file loading, compile/link with full info logs
+  builtin_shaders.h         lookup of the shaders compiled into the binary (the .c is generated)
   renderer.h/.c             instanced quad batcher with styles, blend modes, background and F5 reload
   board_layout.h/.c         pure layout maths for the board and both HUD panels, GL-free and tested
   font.h/.c                 built-in 5x7 bitmap font data and measuring, GL-free and tested

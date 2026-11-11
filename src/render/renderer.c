@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "render/builtin_shaders.h"
 #include "render/shader.h"
 
 /* Per-instance payload: rect (x, y, w, h), colour (r, g, b, a), style params. */
@@ -48,17 +49,40 @@ static void renderer_apply_blend(Renderer *renderer)
 }
 
 /*
+ * Compiles and links one program from the shader directory, or from the copies
+ * built into the executable when the renderer has no shader directory.
+ * Returns 0 on failure.
+ */
+static GLuint renderer_build_program(const Renderer *renderer, const char *vert_name,
+                                     const char *frag_name)
+{
+    char vert_path[RENDERER_SHADER_PATH_MAX];
+    char frag_path[RENDERER_SHADER_PATH_MAX];
+
+    if (renderer->shader_dir[0] == '\0') {
+        const char *vert_source = builtin_shader_source(vert_name);
+        const char *frag_source = builtin_shader_source(frag_name);
+        if (vert_source == NULL || frag_source == NULL) {
+            fprintf(stderr, "renderer: %s or %s is not built in\n", vert_name, frag_name);
+            return 0;
+        }
+        snprintf(vert_path, sizeof vert_path, "<built-in>/%s", vert_name);
+        snprintf(frag_path, sizeof frag_path, "<built-in>/%s", frag_name);
+        return shader_build_program(vert_source, frag_source, vert_path, frag_path);
+    }
+
+    snprintf(vert_path, sizeof vert_path, "%s/%s", renderer->shader_dir, vert_name);
+    snprintf(frag_path, sizeof frag_path, "%s/%s", renderer->shader_dir, frag_name);
+    return shader_load_program(vert_path, frag_path);
+}
+
+/*
  * Loads quad.vert / quad.frag into renderer->program. On any failure the old
  * program stays bound, which is what makes F5 safe to hammer over a typo.
  */
 static bool renderer_load_quad_program(Renderer *renderer)
 {
-    char vert_path[RENDERER_SHADER_PATH_MAX];
-    char frag_path[RENDERER_SHADER_PATH_MAX];
-    snprintf(vert_path, sizeof vert_path, "%s/quad.vert", renderer->shader_dir);
-    snprintf(frag_path, sizeof frag_path, "%s/quad.frag", renderer->shader_dir);
-
-    const GLuint program = shader_load_program(vert_path, frag_path);
+    const GLuint program = renderer_build_program(renderer, "quad.vert", "quad.frag");
     if (program == 0) {
         return false;
     }
@@ -85,12 +109,7 @@ static bool renderer_load_quad_program(Renderer *renderer)
  */
 static void renderer_load_background_program(Renderer *renderer)
 {
-    char vert_path[RENDERER_SHADER_PATH_MAX];
-    char frag_path[RENDERER_SHADER_PATH_MAX];
-    snprintf(vert_path, sizeof vert_path, "%s/background.vert", renderer->shader_dir);
-    snprintf(frag_path, sizeof frag_path, "%s/background.frag", renderer->shader_dir);
-
-    const GLuint program = shader_load_program(vert_path, frag_path);
+    const GLuint program = renderer_build_program(renderer, "background.vert", "background.frag");
     if (program == 0) {
         fprintf(stderr, "renderer: background shaders failed to load; %s\n",
                 renderer->background_program != 0 ? "keeping the previous program"
@@ -123,7 +142,7 @@ bool renderer_init(Renderer *renderer, const char *shader_dir)
     renderer->blend = RENDER_BLEND_ALPHA;
 
     snprintf(renderer->shader_dir, sizeof renderer->shader_dir, "%s",
-             shader_dir);
+             shader_dir != NULL ? shader_dir : "");
 
     renderer->instances = calloc((size_t)renderer->capacity * RENDERER_INSTANCE_FLOATS, sizeof(float));
     if (renderer->instances == NULL) {

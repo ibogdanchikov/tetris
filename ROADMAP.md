@@ -72,7 +72,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - No T-spin, mini T-spin, back-to-back, combo or perfect-clear scoring. `last_kick_index` and `last_action_was_rotation` are recorded but not used by the rules yet.
 - No text beyond the built-in 5x7 font. It covers space, A-Z, 0-9 and `: . - ! ?`; lowercase uses the uppercase glyph and other characters are skipped.
 - No music, volume control, key rebinding, DAS/ARR settings or start-level picker. DAS and ARR are compile-time constants in `src/core/game.h`.
-- No gamepad, replay, CI or packaging.
+- No gamepad, replay or CI. Only Linux is packaged, as a single x86_64 binary built by `packaging/linux/build.sh` and released by `.github/workflows/release.yml`.
 
 ### Rough edges
 
@@ -176,4 +176,4 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - **Game modes.** Sprint (40 lines) and Ultra (a time limit). Add a mode config to the core with a goal type and a time limit, and show the goal in the HUD.
 - **Gamepad support.** Map SDL gamepad events to `GameAction` in `src/app/input_sdl.c`. The core already takes a bitmask, so no rules change is needed.
 - **CI.** Build and run the tests on Linux, Windows and macOS. A Linux sanitizer job and a shader-compile smoke test would catch most regressions.
-- **Packaging.** CPack or platform bundles, with `assets/` next to the executable. Windows and macOS need their own bundle layout and a check that `SDL_GetBasePath` resolves the assets.
+- **Packaging.** Linux ships as a single binary with the shaders built in. Windows and macOS still need their own builds.

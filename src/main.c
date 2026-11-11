@@ -62,7 +62,8 @@ static void app_print_usage(const char *program)
            "\n"
            "  --frames N        render N frames and exit (default: run until closed)\n"
            "  --screenshot PATH write the last rendered frame to PATH as BMP\n"
-           "  --assets DIR      load shaders from DIR/shaders (default: next to the binary)\n"
+           "  --assets DIR      load shaders from DIR/shaders (default: next to the binary,\n"
+           "                    or the built-in copies if there is no assets directory)\n"
            "  --size WxH        initial window size in pixels (default: %dx%d)\n"
            "  --seed N          simulation seed (default: %llu)\n"
            "  --mute            start with the sound muted (M toggles it)\n"
@@ -164,6 +165,10 @@ static bool app_parse_args(int argc, char **argv, AppOptions *options)
  * Shaders live next to the executable (<base path>/assets/shaders) unless
  * --assets names a directory, which lets a developer run from the repo root as
  * ./build/debug/tetris --assets assets and edit shaders in place with F5.
+ *
+ * Without --assets and without an assets directory next to the executable, the
+ * buffer is left empty and the renderer uses the shaders built into the binary.
+ * That is what lets the release build be a single downloadable file.
  */
 static bool app_shader_dir(const char *assets_dir, char *buffer, size_t buffer_size)
 {
@@ -195,6 +200,13 @@ static bool app_shader_dir(const char *assets_dir, char *buffer, size_t buffer_s
     if (written < 0 || (size_t)written >= buffer_size) {
         fprintf(stderr, "error: shader directory path is too long\n");
         return false;
+    }
+
+    SDL_PathInfo info;
+    if (assets_dir == NULL &&
+        (!SDL_GetPathInfo(buffer, &info) || info.type != SDL_PATHTYPE_DIRECTORY)) {
+        SDL_Log("No shader directory at %s, using the built-in shaders", buffer);
+        buffer[0] = '\0';
     }
     return true;
 }
@@ -228,8 +240,9 @@ int main(int argc, char **argv)
     }
 
     Renderer renderer;
-    if (!renderer_init(&renderer, shader_dir)) {
-        fprintf(stderr, "error: renderer initialisation failed (shaders in %s)\n", shader_dir);
+    if (!renderer_init(&renderer, shader_dir[0] != '\0' ? shader_dir : NULL)) {
+        fprintf(stderr, "error: renderer initialisation failed (shaders in %s)\n",
+                shader_dir[0] != '\0' ? shader_dir : "<built-in>");
         platform_shutdown(&platform);
         return 1;
     }

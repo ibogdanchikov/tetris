@@ -118,10 +118,18 @@ GLuint shader_load_program(const char *vertex_path, const char *fragment_path)
         return 0;
     }
 
-    GLuint vertex_shader = shader_compile(GL_VERTEX_SHADER, vertex_source, vertex_path);
-    GLuint fragment_shader = shader_compile(GL_FRAGMENT_SHADER, fragment_source, fragment_path);
+    const GLuint program =
+        shader_build_program(vertex_source, fragment_source, vertex_path, fragment_path);
     free(vertex_source);
     free(fragment_source);
+    return program;
+}
+
+GLuint shader_build_program(const char *vertex_source, const char *fragment_source,
+                            const char *vertex_label, const char *fragment_label)
+{
+    GLuint vertex_shader = shader_compile(GL_VERTEX_SHADER, vertex_source, vertex_label);
+    GLuint fragment_shader = shader_compile(GL_FRAGMENT_SHADER, fragment_source, fragment_label);
 
     if (vertex_shader == 0 || fragment_shader == 0) {
         if (vertex_shader != 0) {
@@ -149,7 +157,7 @@ GLuint shader_load_program(const char *vertex_path, const char *fragment_path)
     glGetProgramiv(program, GL_LINK_STATUS, &status);
     if (status != GL_TRUE) {
         char label[1200];
-        snprintf(label, sizeof label, "%s + %s", vertex_path, fragment_path);
+        snprintf(label, sizeof label, "%s + %s", vertex_label, fragment_label);
         shader_print_log(program, true, label);
         glDeleteProgram(program);
         program = 0;

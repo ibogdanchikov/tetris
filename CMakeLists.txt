@@ -124,6 +124,26 @@ tetris_enable_warnings(tetris_audio)
 
 # --- application ------------------------------------------------------------
 
+# The shaders are also compiled into the executable, so a binary copied on its
+# own (the downloadable release) still runs. Files next to the executable win.
+set(TETRIS_SHADER_NAMES quad.vert quad.frag background.vert background.frag)
+set(TETRIS_SHADER_SOURCES "")
+foreach(name IN LISTS TETRIS_SHADER_NAMES)
+    list(APPEND TETRIS_SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/${name}")
+endforeach()
+set(TETRIS_BUILTIN_SHADERS_C "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_shaders.c")
+add_custom_command(
+    OUTPUT "${TETRIS_BUILTIN_SHADERS_C}"
+    COMMAND "${CMAKE_COMMAND}"
+            "-DSHADER_DIR=${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
+            "-DSHADER_NAMES=${TETRIS_SHADER_NAMES}"
+            "-DOUTPUT=${TETRIS_BUILTIN_SHADERS_C}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_shaders.cmake"
+    DEPENDS ${TETRIS_SHADER_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_shaders.cmake"
+    COMMENT "Embedding shaders"
+    VERBATIM
+)
+
 add_executable(tetris
     src/main.c
     src/app/input_sdl.c
@@ -136,6 +156,7 @@ add_executable(tetris
     src/render/renderer.c
     src/render/shader.c
     src/render/text.c
+    "${TETRIS_BUILTIN_SHADERS_C}"
 )
 target_link_libraries(tetris PRIVATE tetris_core tetris_fx tetris_input tetris_audio
                                      tetris_view_layout glad SDL3::SDL3)
