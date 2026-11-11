@@ -339,7 +339,7 @@ src/render/                 GL rendering
   board_layout.h/.c         pure layout maths for the board and both HUD panels, GL-free and tested
   font.h/.c                 built-in 5x7 bitmap font data and measuring, GL-free and tested
   text.h/.c                 draws strings as merged pixel-run rectangles
-  board_view.h/.c           playfield, ghost, active piece, block / outline styles and the clear animation
+  board_view.h/.c           playfield, ghost, drop beam, active piece and its halo, and the clear animation
   fx_view.h/.c              lock flash, hard-drop trails and additive glow particles
   hud.h/.c                  hold, next, stats and the paused / game-over overlays
 src/app/                    the one place GL and SDL meet outside platform
@@ -420,10 +420,11 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
 - Every quad instance is three `vec4`s: rect, colour and
   `(style, p0, p1, p2)`. Styles are chosen in `quad.frag`, so a beveled cell
   costs exactly the same one instance as a flat rectangle. `renderer_push_rect`
-  is the flat convenience; `renderer_push_styled` selects `RECT_STYLE_BLOCK`,
-  `RECT_STYLE_OUTLINE` or `RECT_STYLE_GLOW`. Locked cells, the active piece and
-  the HUD previews are blocks, the ghost is an outline, and frames, overlays,
-  grid cells and text stay flat.
+  is the flat convenience; `renderer_push_styled` selects any other style.
+  Locked cells, the active piece and the HUD previews are jewel blocks, the
+  ghost is a hologram silhouette (`RECT_STYLE_GHOST`) with a beam of light
+  (`RECT_STYLE_BEAM`) falling to it from the piece, the piece has a glow halo,
+  and frames, overlays, grid cells and text stay flat.
 - Blending is GL state: `renderer_set_blend` flushes the batch before it
   changes, and `renderer_begin` resets it to alpha every frame.
 - The animated background is one full-screen triangle generated from

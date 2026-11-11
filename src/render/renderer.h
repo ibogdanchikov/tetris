@@ -16,24 +16,58 @@ typedef struct Color {
 
 /*
  * Per-instance style, matched by value in quad.frag. Keep the numbers and the
- * enum in step: the shader compares the style id against 0..3.
+ * enum in step: the shader compares the style id against 0..5.
  *
  * RECT_STYLE_FLAT     a plain rectangle, exactly the old behaviour.
- * RECT_STYLE_BLOCK    a glossy block: rounded corners, a bevel lit from the top
- *                     left, a reflection and specular spot on the face, and a
- *                     sheen that sweeps across the screen over time. p0 is the
- *                     bevel width in pixels (0 = 15% of the shorter side).
+ * RECT_STYLE_BLOCK    a jewel block: rounded corners, a bevel lit from the top
+ *                     left, faceted sides around a flat table, a reflection
+ *                     and specular spot, and a sheen that sweeps across the
+ *                     screen over time. p0 is the bevel width in pixels
+ *                     (0 = 12% of the shorter side). p1 is a sparkle seed: any
+ *                     positive value makes the block twinkle now and then at
+ *                     its own random times; 0 = no sparkles.
  * RECT_STYLE_OUTLINE  a border of p0 pixels (0 = 8% of the shorter side) and an
  *                     optional fill of p1 alpha (0.0 = hollow).
  * RECT_STYLE_GLOW     a round radial falloff for particles. p0 is the hardness
  *                     exponent (0 = 2.0).
+ * RECT_STYLE_GHOST    one cell of a hologram silhouette: a glowing edge, a
+ *                     faint fill with drifting scanlines and a flicker. The
+ *                     rect is the whole grid cell. p0 is the edge width in
+ *                     pixels (0 = 10% of the shorter side, at least 2), p1 is
+ *                     how far the sides without a neighbor are pulled in, in
+ *                     pixels, and p2 is the mask of neighboring cells that
+ *                     belong to the same silhouette (RECT_GHOST_* bits).
+ *                     Meant for additive blending.
+ * RECT_STYLE_BEAM     a vertical beam of light, bright at the top, with
+ *                     streaks falling down it. p0 and p1 are 1 when another
+ *                     beam runs right next to it on the left or the right, so
+ *                     only the free sides fade out. Meant for additive
+ *                     blending.
  */
 typedef enum RectStyle {
     RECT_STYLE_FLAT = 0,
     RECT_STYLE_BLOCK = 1,
     RECT_STYLE_OUTLINE = 2,
     RECT_STYLE_GLOW = 3,
+    RECT_STYLE_GHOST = 4,
+    RECT_STYLE_BEAM = 5,
 } RectStyle;
+
+/*
+ * Neighbor bits for the p2 mask of RECT_STYLE_GHOST, matched by GHOST_* in
+ * quad.frag. A bit is set when that neighbor cell is part of the same
+ * silhouette.
+ */
+enum {
+    RECT_GHOST_LEFT = 1,
+    RECT_GHOST_RIGHT = 2,
+    RECT_GHOST_DOWN = 4,
+    RECT_GHOST_UP = 8,
+    RECT_GHOST_DOWN_LEFT = 16,
+    RECT_GHOST_DOWN_RIGHT = 32,
+    RECT_GHOST_UP_LEFT = 64,
+    RECT_GHOST_UP_RIGHT = 128,
+};
 
 /* How the queued rectangles blend into the framebuffer. */
 typedef enum RenderBlend {

@@ -33,7 +33,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Presentation reads state and never writes it.** The views take `const GameState *`. The effects layer has its own `Fx` state and its own splitmix64 generator, so particles cannot change the piece order. Pause is app state in `main.c`, not part of `GameState`.
 
-**There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` draws a glossy block with rounded corners, a lit bevel, a reflection, a specular spot and a sheen that sweeps across the screen every few seconds, `RECT_STYLE_OUTLINE` draws a border with an optional fill, and `RECT_STYLE_GLOW` draws a radial falloff for particles. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
+**There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` draws a jewel block with rounded corners, a lit bevel, faceted sides around a flat table, a reflection, a specular spot, a sheen that sweeps across the screen every few seconds and, with a seed in `p1`, random sparkles. `RECT_STYLE_OUTLINE` draws a border with an optional fill (nothing uses it at the moment), `RECT_STYLE_GLOW` draws a radial falloff for particles and the active piece's halo, `RECT_STYLE_GHOST` draws one cell of the ghost's hologram silhouette from a mask of its neighbors, and `RECT_STYLE_BEAM` draws the light that falls from the piece to the ghost. The animated parts of the block, ghost and beam styles run on the `u_time` uniform, so `board_view` passes no time of its own. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
 
 **GLAD is vendored and loaded through SDL.** `gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)` runs in `platform_init` after the context is current. The project never links `libGL`; `libgl-dev` is only needed for the driver headers.
 
@@ -160,7 +160,7 @@ void fx_view_draw(Renderer *renderer, const BoardLayout *layout, const Fx *fx);
 void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game, bool paused);
 ```
 
-Draw order is board, effects, HUD. `board_view_draw` draws the frame, grid, locked cells, the ghost and the active piece, or the clear animation while the phase is clearing. `fx_view_draw` draws the lock flash, trails and particles; it switches to additive blending for the trails and particles and restores alpha before returning. `hud_draw` draws the hold and next panels, the stats and the paused or game-over overlay.
+Draw order is board, effects, HUD. `board_view_draw` draws the frame, grid and locked cells, then either the clear animation while the phase is clearing or, with additive blending, the drop beam, the ghost and the halo, followed by the active piece with alpha blending. `fx_view_draw` draws the lock flash, trails and particles; it switches to additive blending for the trails and particles and restores alpha before returning. `hud_draw` draws the hold and next panels, the stats and the paused or game-over overlay.
 
 ### Effects
 

@@ -1,5 +1,7 @@
 #include "render/board_view.h"
 
+#include <stddef.h>
+
 #include "core/piece.h"
 #include "fx/fx.h"
 
@@ -23,14 +25,33 @@ static const Color BOARD_VIEW_EMPTY_COLOR = { 0.06f, 0.06f, 0.08f, 1.0f };
 #define BOARD_VIEW_CELL_INSET 0.06f
 
 /*
- * The ghost is an outline of the piece colour with a very faint fill. The border
- * is a tenth of a cell with a two-pixel floor, so it stays readable when the
- * board shrinks to a fourteen-pixel cell.
+ * The ghost is a hologram of the piece's outline in the piece color, added on
+ * top of the board. The edge is a twelfth of a cell with a two-pixel floor, so
+ * it stays readable when the board shrinks to a fourteen-pixel cell.
  */
-#define BOARD_VIEW_GHOST_ALPHA 0.70f
-#define BOARD_VIEW_GHOST_BORDER_CELLS 0.10f
+#define BOARD_VIEW_GHOST_ALPHA 0.85f
+#define BOARD_VIEW_GHOST_BORDER_CELLS 0.08f
 #define BOARD_VIEW_GHOST_BORDER_MIN_PX 2.0f
-#define BOARD_VIEW_GHOST_FILL_ALPHA 0.10f
+
+/* A beam of light falls from each column of the piece to the ghost. */
+#define BOARD_VIEW_BEAM_ALPHA 0.26f
+
+/*
+ * A soft halo of the piece color around the active piece, a glow per cell.
+ * The hardness is the RECT_STYLE_GLOW falloff exponent; below the default 2.0
+ * the light reaches further out.
+ */
+#define BOARD_VIEW_HALO_CELLS 3.0f
+#define BOARD_VIEW_HALO_ALPHA 0.40f
+#define BOARD_VIEW_HALO_HARDNESS 1.6f
+
+/*
+ * Sparkle seeds for RECT_STYLE_BLOCK. Locked cells use their board index, the
+ * active piece and the HUD previews start at their own bases, so no two blocks
+ * on screen share a seed for long.
+ */
+#define BOARD_VIEW_SPARKLE_PIECE_SEED 500.0f
+#define BOARD_VIEW_SPARKLE_PREVIEW_SEED 1000.0f
 
 /* Solid frame around a box is a quarter cell wide. */
 #define BOARD_VIEW_FRAME_CELLS 0.25f
@@ -73,10 +94,15 @@ static void board_view_push_cell(Renderer *renderer, float x, float y, float cel
     board_view_push_cell_styled(renderer, x, y, cell, color, RECT_STYLE_FLAT, 0.0f, 0.0f, 0.0f);
 }
 
-/* Bevel width passed to STYLE_BLOCK: 0 lets the shader use 15% of the cell. */
-static void board_view_push_block(Renderer *renderer, float x, float y, float cell, Color color)
+/*
+ * Bevel width passed to STYLE_BLOCK: 0 lets the shader use 12% of the cell.
+ * sparkle_seed 0 keeps the block from twinkling.
+ */
+static void board_view_push_block(Renderer *renderer, float x, float y, float cell, Color color,
+                                  float sparkle_seed)
 {
-    board_view_push_cell_styled(renderer, x, y, cell, color, RECT_STYLE_BLOCK, 0.0f, 0.0f, 0.0f);
+    board_view_push_cell_styled(renderer, x, y, cell, color, RECT_STYLE_BLOCK, 0.0f, sparkle_seed,
+                                0.0f);
 }
 
 static void board_view_draw_frame(Renderer *renderer, float x, float y, int w, int h, float cell,
@@ -124,17 +150,53 @@ static void board_view_draw_locked(Renderer *renderer, const BoardLayout *layout
             } else {
                 board_view_push_block(renderer, board_view_cell_x(layout, x),
                                       board_view_cell_y(layout, y), cell,
-                                      BOARD_VIEW_PALETTE[type]);
+                                      BOARD_VIEW_PALETTE[type],
+                                      (float)(1 + x + y * BOARD_WIDTH));
             }
         }
     }
 }
 
+/* True when cell (x, y) is one of the four given cells. */
+static bool board_view_cells_contain(const int xs[4], const int ys[4], int x, int y)
+{
+    for (int i = 0; i < 4; ++i) {
+        if (xs[i] == x && ys[i] == y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* RECT_GHOST_* mask of the neighbors of cell i that are also among the cells. */
+static unsigned board_view_ghost_mask(const int xs[4], const int ys[4], int i)
+{
+    static const struct {
+        int dx;
+        int dy;
+        unsigned bit;
+    } neighbors[] = {
+        { -1, 0, RECT_GHOST_LEFT },       { 1, 0, RECT_GHOST_RIGHT },
+        { 0, -1, RECT_GHOST_DOWN },       { 0, 1, RECT_GHOST_UP },
+        { -1, -1, RECT_GHOST_DOWN_LEFT }, { 1, -1, RECT_GHOST_DOWN_RIGHT },
+        { -1, 1, RECT_GHOST_UP_LEFT },    { 1, 1, RECT_GHOST_UP_RIGHT },
+    };
+
+    unsigned mask = 0;
+    for (size_t n = 0; n < sizeof neighbors / sizeof neighbors[0]; ++n) {
+        if (board_view_cells_contain(xs, ys, xs[i] + neighbors[n].dx, ys[i] + neighbors[n].dy)) {
+            mask |= neighbors[n].bit;
+        }
+    }
+    return mask;
+}
+
 /*
- * Outline of the active piece at its landing row. It is drawn before the
- * piece, and cells shared with the piece are skipped so the two never stack up
- * into a brighter blob. The faint fill keeps the shape readable without
- * pretending the cells are already locked.
+ * The ghost: a hologram of the piece's silhouette at its landing row. Each
+ * cell is drawn over the whole grid slot with a mask of its ghost neighbors,
+ * so the shader can join the four cells into one outline. Cells shared with
+ * the piece are skipped; the piece covers them anyway, and drawing them would
+ * only brighten its edges.
  */
 static void board_view_draw_ghost(Renderer *renderer, const BoardLayout *layout,
                                   const GameState *game)
@@ -153,25 +215,98 @@ static void board_view_draw_ghost(Renderer *renderer, const BoardLayout *layout,
     const Color base = BOARD_VIEW_PALETTE[piece_cell_type(game->piece.type)];
     const Color color = { base.r, base.g, base.b, BOARD_VIEW_GHOST_ALPHA };
     const float cell = (float)layout->cell_size;
+    const float inset = cell * BOARD_VIEW_CELL_INSET;
     float border = cell * BOARD_VIEW_GHOST_BORDER_CELLS;
     if (border < BOARD_VIEW_GHOST_BORDER_MIN_PX) {
         border = BOARD_VIEW_GHOST_BORDER_MIN_PX;
     }
 
     for (int i = 0; i < 4; ++i) {
-        bool overlaps_piece = false;
-        for (int j = 0; j < 4; ++j) {
-            if (ghost_x[i] == active_x[j] && ghost_y[i] == active_y[j]) {
-                overlaps_piece = true;
-                break;
-            }
-        }
-        if (overlaps_piece) {
+        if (board_view_cells_contain(active_x, active_y, ghost_x[i], ghost_y[i])) {
             continue;
         }
-        board_view_push_cell_styled(renderer, board_view_cell_x(layout, ghost_x[i]),
-                                    board_view_cell_y(layout, ghost_y[i]), cell, color,
-                                    RECT_STYLE_OUTLINE, border, BOARD_VIEW_GHOST_FILL_ALPHA, 0.0f);
+        renderer_push_styled(renderer, board_view_cell_x(layout, ghost_x[i]),
+                             board_view_cell_y(layout, ghost_y[i]), cell, cell, color,
+                             RECT_STYLE_GHOST, border, inset,
+                             (float)board_view_ghost_mask(ghost_x, ghost_y, i));
+    }
+}
+
+/*
+ * A beam of light down each column of the piece, from its lowest cell in that
+ * column to the top of the ghost below it. A tetromino's columns are always
+ * next to each other, so each beam tells the shader whether the piece also
+ * has a column on its left and right. Nothing is drawn once the piece has
+ * landed.
+ */
+static void board_view_draw_beam(Renderer *renderer, const BoardLayout *layout,
+                                 const GameState *game)
+{
+    const int drop = game->piece.y - game_ghost_y(game);
+    if (drop <= 0) {
+        return;
+    }
+
+    int xs[4];
+    int ys[4];
+    game_piece_cells(&game->piece, xs, ys);
+
+    const Color base = BOARD_VIEW_PALETTE[piece_cell_type(game->piece.type)];
+    const Color color = { base.r, base.g, base.b, BOARD_VIEW_BEAM_ALPHA };
+    const float cell = (float)layout->cell_size;
+
+    for (int i = 0; i < 4; ++i) {
+        /* One beam per column, drawn for the first cell found in it. */
+        bool first = true;
+        int lowest_y = ys[i];
+        int highest_y = ys[i];
+        bool beam_left = false;
+        bool beam_right = false;
+        for (int j = 0; j < 4; ++j) {
+            if (xs[j] == xs[i]) {
+                first = first && j >= i;
+                lowest_y = ys[j] < lowest_y ? ys[j] : lowest_y;
+                highest_y = ys[j] > highest_y ? ys[j] : highest_y;
+            }
+            beam_left = beam_left || xs[j] == xs[i] - 1;
+            beam_right = beam_right || xs[j] == xs[i] + 1;
+        }
+        if (!first) {
+            continue;
+        }
+
+        /* The ghost is the piece moved `drop` rows down, so its top cell in
+           this column is the piece's top cell minus `drop`. The beam fills the
+           empty rows from there up to the piece's lowest cell. */
+        const float bottom = board_view_cell_y(layout, highest_y - drop + 1);
+        const float top = board_view_cell_y(layout, lowest_y);
+        if (top <= bottom) {
+            continue;
+        }
+        renderer_push_styled(renderer, board_view_cell_x(layout, xs[i]), bottom, cell,
+                             top - bottom, color, RECT_STYLE_BEAM, beam_left ? 1.0f : 0.0f,
+                             beam_right ? 1.0f : 0.0f, 0.0f);
+    }
+}
+
+/* A soft glow of the piece color behind each cell of the active piece. */
+static void board_view_draw_halo(Renderer *renderer, const BoardLayout *layout,
+                                 const GameState *game)
+{
+    int xs[4];
+    int ys[4];
+    game_piece_cells(&game->piece, xs, ys);
+
+    const Color base = BOARD_VIEW_PALETTE[piece_cell_type(game->piece.type)];
+    const Color color = { base.r, base.g, base.b, BOARD_VIEW_HALO_ALPHA };
+    const float cell = (float)layout->cell_size;
+    const float size = cell * BOARD_VIEW_HALO_CELLS;
+
+    for (int i = 0; i < 4; ++i) {
+        const float center_x = board_view_cell_x(layout, xs[i]) + cell * 0.5f;
+        const float center_y = board_view_cell_y(layout, ys[i]) + cell * 0.5f;
+        renderer_push_styled(renderer, center_x - size * 0.5f, center_y - size * 0.5f, size, size,
+                             color, RECT_STYLE_GLOW, BOARD_VIEW_HALO_HARDNESS, 0.0f, 0.0f);
     }
 }
 
@@ -228,7 +363,8 @@ static void board_view_draw_piece(Renderer *renderer, const BoardLayout *layout,
 
     for (int i = 0; i < 4; ++i) {
         board_view_push_block(renderer, board_view_cell_x(layout, xs[i]),
-                              board_view_cell_y(layout, ys[i]), cell, color);
+                              board_view_cell_y(layout, ys[i]), cell, color,
+                              BOARD_VIEW_SPARKLE_PIECE_SEED + (float)i);
     }
 }
 
@@ -268,10 +404,13 @@ void board_view_draw_preview(Renderer *renderer, LayoutRect box, int cell_size, 
     const float cell = (float)cell_size;
     const float left = box.x + (box.w - (float)(max_x - min_x + 1) * cell) * 0.5f;
     const float bottom = box.y + (box.h - (float)(max_y - min_y + 1) * cell) * 0.5f;
+    /* Seeded from the box position, so each preview box twinkles on its own. */
+    const float seed = BOARD_VIEW_SPARKLE_PREVIEW_SEED + box.x * 0.73f + box.y * 1.37f;
 
     for (int i = 0; i < 4; ++i) {
         board_view_push_block(renderer, left + (float)(cells[i].x - min_x) * cell,
-                              bottom + (float)(cells[i].y - min_y) * cell, cell, color);
+                              bottom + (float)(cells[i].y - min_y) * cell, cell, color,
+                              seed + (float)i);
     }
 }
 
@@ -294,7 +433,12 @@ void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameSt
        clip keeps those cells from drawing over the frame. */
     renderer_set_clip(renderer, (int)layout->origin_x, (int)layout->origin_y, layout->width,
                       layout->height);
+    /* Beam, ghost and halo are light: they add up instead of covering. */
+    renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
+    board_view_draw_beam(renderer, layout, game);
     board_view_draw_ghost(renderer, layout, game);
+    board_view_draw_halo(renderer, layout, game);
+    renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
     board_view_draw_piece(renderer, layout, game);
     renderer_clear_clip(renderer);
 }
