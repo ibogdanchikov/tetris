@@ -11,9 +11,14 @@
  *
  * pixel is the edge length of one font pixel in framebuffer pixels. A character
  * the font has no glyph for is skipped but still advances the cursor.
+ *
+ * glow is a neon glow drawn behind the letters with additive blending, in its
+ * own color; its alpha is the strength, and 0 draws no glow. The letters
+ * themselves stay crisp. Leaves the blend mode at alpha.
  */
-void text_draw(Renderer *renderer, float x, float y, int pixel, Color color, const char *text);
+void text_draw(Renderer *renderer, float x, float y, int pixel, Color color, Color glow,
+               const char *text);
 
-/* Draws text centred both horizontally and vertically inside a box. */
+/* Draws text centered both horizontally and vertically inside a box. */
 void text_draw_centered(Renderer *renderer, float x, float y, float w, float h, int pixel,
-                        Color color, const char *text);
+                        Color color, Color glow, const char *text);

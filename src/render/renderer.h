@@ -19,17 +19,21 @@ typedef struct Color {
  * enum in step: the shader compares the style id against 0..5.
  *
  * RECT_STYLE_FLAT     a plain rectangle, exactly the old behaviour.
- * RECT_STYLE_BLOCK    a jewel block: rounded corners, a bevel lit from the top
- *                     left, faceted sides around a flat table, a reflection
- *                     and specular spot, and a sheen that sweeps across the
- *                     screen over time. p0 is the bevel width in pixels
- *                     (0 = 12% of the shorter side). p1 is a sparkle seed: any
+ * RECT_STYLE_BLOCK    a neon glass block: rounded corners, a glowing tube
+ *                     along the edge, dark tinted glass lit from inside, a
+ *                     thin inner line, and a sheen that sweeps across the
+ *                     screen over time. p0 is the tube width in pixels
+ *                     (0 = 15% of the shorter side). p1 is a sparkle seed: any
  *                     positive value makes the block twinkle now and then at
  *                     its own random times; 0 = no sparkles.
- * RECT_STYLE_OUTLINE  a border of p0 pixels (0 = 8% of the shorter side) and an
- *                     optional fill of p1 alpha (0.0 = hollow).
- * RECT_STYLE_GLOW     a round radial falloff for particles. p0 is the hardness
- *                     exponent (0 = 2.0).
+ * RECT_STYLE_NEON     a glowing neon tube along a rounded rectangle, or with
+ *                     p0 = 0 a glowing filled rounded rectangle. The rect
+ *                     includes the glow: the shape sits p1 pixels in from
+ *                     every side and the glow fades out over them. p0 is the
+ *                     tube width and p2 the corner radius, both in pixels.
+ *                     Meant for additive blending.
+ * RECT_STYLE_GLOW     a round radial falloff for particles and halos. p0 is
+ *                     the hardness exponent (0 = 2.0).
  * RECT_STYLE_GHOST    one cell of a hologram silhouette: a glowing edge, a
  *                     faint fill with drifting scanlines and a flicker. The
  *                     rect is the whole grid cell. p0 is the edge width in
@@ -47,7 +51,7 @@ typedef struct Color {
 typedef enum RectStyle {
     RECT_STYLE_FLAT = 0,
     RECT_STYLE_BLOCK = 1,
-    RECT_STYLE_OUTLINE = 2,
+    RECT_STYLE_NEON = 2,
     RECT_STYLE_GLOW = 3,
     RECT_STYLE_GHOST = 4,
     RECT_STYLE_BEAM = 5,

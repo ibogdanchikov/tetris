@@ -27,6 +27,14 @@
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
                      float alpha, float frame_pulse);
 
+/*
+ * Draws the neon frame around a box: a glowing tube just outside it with
+ * rounded corners. pulse (0..1) pushes the neon towards white for the level-up
+ * effect. The board and the HUD boxes share it, so every frame looks the same.
+ * Leaves the blend mode at alpha.
+ */
+void board_view_draw_neon_frame(Renderer *renderer, LayoutRect box, int cell_size, float pulse);
+
 /* Classic tetromino colour for a cell type, shared by the board and the HUD. */
 Color board_view_cell_color(CellType type);
 

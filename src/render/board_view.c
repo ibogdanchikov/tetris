@@ -17,9 +17,12 @@ static const Color BOARD_VIEW_PALETTE[CELL_TYPE_COUNT] = {
     [CELL_L] = { 0.94f, 0.50f, 0.06f, 1.00f },     /* orange */
 };
 
-static const Color BOARD_VIEW_FRAME_COLOR = { 0.32f, 0.32f, 0.38f, 1.0f };
-static const Color BOARD_VIEW_GRID_COLOR = { 0.13f, 0.13f, 0.16f, 1.0f };
-static const Color BOARD_VIEW_EMPTY_COLOR = { 0.06f, 0.06f, 0.08f, 1.0f };
+/* The neon of the frames around the board and the HUD boxes. */
+static const Color BOARD_VIEW_FRAME_COLOR = { 0.20f, 0.78f, 1.00f, 1.0f };
+
+/* The grid lines are the gaps between the empty cells: faint blue on near black. */
+static const Color BOARD_VIEW_GRID_COLOR = { 0.07f, 0.10f, 0.19f, 1.0f };
+static const Color BOARD_VIEW_EMPTY_COLOR = { 0.018f, 0.020f, 0.035f, 1.0f };
 
 /* Inset of a cell's fill inside its grid slot, so the grid lines stay visible. */
 #define BOARD_VIEW_CELL_INSET 0.06f
@@ -53,8 +56,22 @@ static const Color BOARD_VIEW_EMPTY_COLOR = { 0.06f, 0.06f, 0.08f, 1.0f };
 #define BOARD_VIEW_SPARKLE_PIECE_SEED 500.0f
 #define BOARD_VIEW_SPARKLE_PREVIEW_SEED 1000.0f
 
-/* Solid frame around a box is a quarter cell wide. */
-#define BOARD_VIEW_FRAME_CELLS 0.25f
+/*
+ * The neon frame around a box: a tube whose center line runs FRAME_OFFSET
+ * outside the box, FRAME_TUBE wide with a floor of FRAME_TUBE_MIN_PX, with
+ * rounded corners, and a glow that fades out over FRAME_GLOW. The tube stays
+ * inside the quarter cell the old solid frame took up; the glow reaches into
+ * the one-cell gaps between the board and the panels.
+ */
+#define BOARD_VIEW_FRAME_OFFSET_CELLS 0.14f
+#define BOARD_VIEW_FRAME_TUBE_CELLS 0.07f
+#define BOARD_VIEW_FRAME_TUBE_MIN_PX 2.0f
+#define BOARD_VIEW_FRAME_RADIUS_CELLS 0.30f
+#define BOARD_VIEW_FRAME_GLOW_CELLS 0.80f
+
+/* Every block glows a little into the gaps around it, like a neon sign. */
+#define BOARD_VIEW_BLOCK_GLOW_CELLS 1.8f
+#define BOARD_VIEW_BLOCK_GLOW_ALPHA 0.18f
 
 /* How far the level-up pulse pushes the frame colour towards white. */
 #define BOARD_VIEW_FRAME_PULSE_MAX 0.85f
@@ -95,7 +112,7 @@ static void board_view_push_cell(Renderer *renderer, float x, float y, float cel
 }
 
 /*
- * Bevel width passed to STYLE_BLOCK: 0 lets the shader use 12% of the cell.
+ * Tube width passed to STYLE_BLOCK: 0 lets the shader pick it from the cell.
  * sparkle_seed 0 keeps the block from twinkling.
  */
 static void board_view_push_block(Renderer *renderer, float x, float y, float cell, Color color,
@@ -105,15 +122,35 @@ static void board_view_push_block(Renderer *renderer, float x, float y, float ce
                                 0.0f);
 }
 
-static void board_view_draw_frame(Renderer *renderer, float x, float y, int w, int h, float cell,
-                                  float pulse)
+/*
+ * A soft round glow of the given color centered on a point, size pixels
+ * across. The caller sets additive blending.
+ */
+static void board_view_push_glow(Renderer *renderer, float center_x, float center_y, float size,
+                                 Color color, float alpha, float hardness)
 {
-    const float frame = cell * BOARD_VIEW_FRAME_CELLS;
-    const Color frame_color = board_view_brighten(BOARD_VIEW_FRAME_COLOR,
-                                                  pulse * BOARD_VIEW_FRAME_PULSE_MAX);
-    renderer_push_rect(renderer, x - frame, y - frame, (float)w + 2.0f * frame,
-                       (float)h + 2.0f * frame, frame_color);
-    renderer_push_rect(renderer, x, y, (float)w, (float)h, BOARD_VIEW_GRID_COLOR);
+    const Color glow = { color.r, color.g, color.b, alpha };
+    renderer_push_styled(renderer, center_x - size * 0.5f, center_y - size * 0.5f, size, size,
+                         glow, RECT_STYLE_GLOW, hardness, 0.0f, 0.0f);
+}
+
+void board_view_draw_neon_frame(Renderer *renderer, LayoutRect box, int cell_size, float pulse)
+{
+    const float cell = (float)cell_size;
+    float tube = cell * BOARD_VIEW_FRAME_TUBE_CELLS;
+    if (tube < BOARD_VIEW_FRAME_TUBE_MIN_PX) {
+        tube = BOARD_VIEW_FRAME_TUBE_MIN_PX;
+    }
+    const float reach = cell * BOARD_VIEW_FRAME_GLOW_CELLS;
+    const float grow = cell * BOARD_VIEW_FRAME_OFFSET_CELLS + reach;
+    const Color color = board_view_brighten(BOARD_VIEW_FRAME_COLOR,
+                                            pulse * BOARD_VIEW_FRAME_PULSE_MAX);
+
+    renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
+    renderer_push_styled(renderer, box.x - grow, box.y - grow, box.w + 2.0f * grow,
+                         box.h + 2.0f * grow, color, RECT_STYLE_NEON, tube, reach,
+                         cell * BOARD_VIEW_FRAME_RADIUS_CELLS);
+    renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
 }
 
 /* True while this row is one of the full rows waiting out the clear delay. */
@@ -130,10 +167,18 @@ static bool board_view_row_clearing(const GameState *game, int y)
     return false;
 }
 
+/* The locked block at (x, y), or CELL_EMPTY for a row that is clearing. */
+static CellType board_view_locked_type(const GameState *game, int x, int y)
+{
+    return board_view_row_clearing(game, y) ? CELL_EMPTY : board_get(&game->board, x, y);
+}
+
 /*
  * Grid background plus every non-empty cell; hidden buffer rows are not drawn.
  * Cells of a clearing row keep their empty background here: the animated blocks
  * are drawn on top of it, so a vanished cell leaves a normal empty slot behind.
+ * The blocks' glow goes between the empty cells and the blocks, so it lights up
+ * the grid around the stack but never washes over a block.
  */
 static void board_view_draw_locked(Renderer *renderer, const BoardLayout *layout,
                                    const GameState *game)
@@ -141,13 +186,32 @@ static void board_view_draw_locked(Renderer *renderer, const BoardLayout *layout
     const float cell = (float)layout->cell_size;
 
     for (int y = 0; y < BOARD_VISIBLE_HEIGHT; ++y) {
-        const bool clearing = board_view_row_clearing(game, y);
         for (int x = 0; x < BOARD_WIDTH; ++x) {
-            const CellType type = board_get(&game->board, x, y);
-            if (type == CELL_EMPTY || clearing) {
+            if (board_view_locked_type(game, x, y) == CELL_EMPTY) {
                 board_view_push_cell(renderer, board_view_cell_x(layout, x),
                                      board_view_cell_y(layout, y), cell, BOARD_VIEW_EMPTY_COLOR);
-            } else {
+            }
+        }
+    }
+
+    renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
+    for (int y = 0; y < BOARD_VISIBLE_HEIGHT; ++y) {
+        for (int x = 0; x < BOARD_WIDTH; ++x) {
+            const CellType type = board_view_locked_type(game, x, y);
+            if (type != CELL_EMPTY) {
+                board_view_push_glow(renderer, board_view_cell_x(layout, x) + cell * 0.5f,
+                                     board_view_cell_y(layout, y) + cell * 0.5f,
+                                     cell * BOARD_VIEW_BLOCK_GLOW_CELLS, BOARD_VIEW_PALETTE[type],
+                                     BOARD_VIEW_BLOCK_GLOW_ALPHA, 0.0f);
+            }
+        }
+    }
+    renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
+
+    for (int y = 0; y < BOARD_VISIBLE_HEIGHT; ++y) {
+        for (int x = 0; x < BOARD_WIDTH; ++x) {
+            const CellType type = board_view_locked_type(game, x, y);
+            if (type != CELL_EMPTY) {
                 board_view_push_block(renderer, board_view_cell_x(layout, x),
                                       board_view_cell_y(layout, y), cell,
                                       BOARD_VIEW_PALETTE[type],
@@ -297,16 +361,14 @@ static void board_view_draw_halo(Renderer *renderer, const BoardLayout *layout,
     int ys[4];
     game_piece_cells(&game->piece, xs, ys);
 
-    const Color base = BOARD_VIEW_PALETTE[piece_cell_type(game->piece.type)];
-    const Color color = { base.r, base.g, base.b, BOARD_VIEW_HALO_ALPHA };
+    const Color color = BOARD_VIEW_PALETTE[piece_cell_type(game->piece.type)];
     const float cell = (float)layout->cell_size;
-    const float size = cell * BOARD_VIEW_HALO_CELLS;
 
     for (int i = 0; i < 4; ++i) {
-        const float center_x = board_view_cell_x(layout, xs[i]) + cell * 0.5f;
-        const float center_y = board_view_cell_y(layout, ys[i]) + cell * 0.5f;
-        renderer_push_styled(renderer, center_x - size * 0.5f, center_y - size * 0.5f, size, size,
-                             color, RECT_STYLE_GLOW, BOARD_VIEW_HALO_HARDNESS, 0.0f, 0.0f);
+        board_view_push_glow(renderer, board_view_cell_x(layout, xs[i]) + cell * 0.5f,
+                             board_view_cell_y(layout, ys[i]) + cell * 0.5f,
+                             cell * BOARD_VIEW_HALO_CELLS, color, BOARD_VIEW_HALO_ALPHA,
+                             BOARD_VIEW_HALO_HARDNESS);
     }
 }
 
@@ -407,6 +469,15 @@ void board_view_draw_preview(Renderer *renderer, LayoutRect box, int cell_size, 
     /* Seeded from the box position, so each preview box twinkles on its own. */
     const float seed = BOARD_VIEW_SPARKLE_PREVIEW_SEED + box.x * 0.73f + box.y * 1.37f;
 
+    renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
+    for (int i = 0; i < 4; ++i) {
+        board_view_push_glow(renderer, left + ((float)(cells[i].x - min_x) + 0.5f) * cell,
+                             bottom + ((float)(cells[i].y - min_y) + 0.5f) * cell,
+                             cell * BOARD_VIEW_BLOCK_GLOW_CELLS, color,
+                             BOARD_VIEW_BLOCK_GLOW_ALPHA, 0.0f);
+    }
+    renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
+
     for (int i = 0; i < 4; ++i) {
         board_view_push_block(renderer, left + (float)(cells[i].x - min_x) * cell,
                               bottom + (float)(cells[i].y - min_y) * cell, cell, color,
@@ -418,8 +489,10 @@ void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameSt
                      float alpha, float frame_pulse)
 {
     /* Playfield first: frame, grid and locked cells, then the falling piece. */
-    board_view_draw_frame(renderer, layout->origin_x, layout->origin_y, layout->width,
-                          layout->height, (float)layout->cell_size, frame_pulse);
+    const LayoutRect board = { layout->origin_x, layout->origin_y, (float)layout->width,
+                               (float)layout->height };
+    board_view_draw_neon_frame(renderer, board, layout->cell_size, frame_pulse);
+    renderer_push_rect(renderer, board.x, board.y, board.w, board.h, BOARD_VIEW_GRID_COLOR);
     board_view_draw_locked(renderer, layout, game);
 
     /* While rows are clearing they are still on the board, and there is no

@@ -3,11 +3,15 @@
 #include "render/board_view.h"
 
 /*
- * Cell inset of the lock flash. It matches BOARD_VIEW_CELL_INSET in
- * board_view.c so the flash covers exactly the beveled block underneath; there
- * is no shared header for it because nothing else needs the value.
+ * Cell inset and corner radius of the lock flash. They match
+ * BOARD_VIEW_CELL_INSET in board_view.c and BLOCK_CORNER_RADIUS in quad.frag,
+ * so the flash covers exactly the rounded block underneath; there is no shared
+ * header for them because nothing else needs the values. The flash also glows
+ * a little past the block.
  */
 #define FX_VIEW_CELL_INSET 0.06f
+#define FX_VIEW_FLASH_RADIUS 0.18f
+#define FX_VIEW_FLASH_GLOW_CELLS 0.25f
 
 /* Peak alpha of each element; the timers scale these down as they fade. */
 #define FX_VIEW_PARTICLE_ALPHA 0.90f
@@ -38,6 +42,7 @@ static void fx_view_draw_lock_flash(Renderer *renderer, const BoardLayout *layou
     const float cell = (float)layout->cell_size;
     const float inset = cell * FX_VIEW_CELL_INSET;
     const float inner = cell - 2.0f * inset;
+    const float reach = cell * FX_VIEW_FLASH_GLOW_CELLS;
     const Color color = { 1.0f, 1.0f, 1.0f, amount * FX_LOCK_FLASH_STRENGTH };
 
     for (int i = 0; i < fx->lock_cell_count; ++i) {
@@ -45,9 +50,10 @@ static void fx_view_draw_lock_flash(Renderer *renderer, const BoardLayout *layou
         if (flash->y < 0 || flash->y >= BOARD_VISIBLE_HEIGHT) {
             continue;
         }
-        renderer_push_rect(renderer, fx_view_pixel_x(layout, (float)flash->x) + inset,
-                           fx_view_pixel_y(layout, (float)flash->y) + inset, inner, inner,
-                           color);
+        renderer_push_styled(renderer, fx_view_pixel_x(layout, (float)flash->x) + inset - reach,
+                             fx_view_pixel_y(layout, (float)flash->y) + inset - reach,
+                             inner + 2.0f * reach, inner + 2.0f * reach, color, RECT_STYLE_NEON,
+                             0.0f, reach, inner * FX_VIEW_FLASH_RADIUS);
     }
 }
 

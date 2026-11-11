@@ -3,7 +3,7 @@
 /* Style ids, mirrored by RectStyle in render/renderer.h. */
 const int STYLE_FLAT = 0;
 const int STYLE_BLOCK = 1;
-const int STYLE_OUTLINE = 2;
+const int STYLE_NEON = 2;
 const int STYLE_GLOW = 3;
 const int STYLE_GHOST = 4;
 const int STYLE_BEAM = 5;
@@ -22,21 +22,30 @@ out vec4 frag_color;
 
 uniform vec2 u_viewport_size;
 
-/* Presentation time in seconds, wrapped to an hour by the app. Only the block
-   sheen uses it. */
+/* Presentation time in seconds, wrapped to an hour by the app. It drives the
+   sheen, the sparkles, the ghost and the beam. */
 uniform float u_time;
 
 /*
- * Block shape, as fractions of the shorter side of the block. Inside the
- * beveled rim the face is cut like a jewel: four shallow facets slope up to a
- * flat table, which starts BLOCK_TABLE_INSET in from the outer edge.
+ * Neon glass blocks. Every light comes from the block itself: a glowing tube
+ * along the edge, light bleeding from it into dark tinted glass, a soft glow
+ * in the middle and a thin inner line with miters to the corners. Sizes are
+ * fractions of the shorter side of the block.
+ *
+ * BLOCK_GLASS is the brightness of the glass far from any light, as a
+ * fraction of the piece color. BLOCK_BLEED is how far the tube's light reaches
+ * into the glass, BLOCK_BLEED_GAIN and BLOCK_CORE_GAIN how much the bleed and
+ * the middle glow add. BLOCK_INNER_LINE is where the inner line runs.
  */
-const float BLOCK_CORNER_RADIUS = 0.16;
-const float BLOCK_BEVEL = 0.12;
-const float BLOCK_TABLE_INSET = 0.30;
-
-/* The light comes from the top left. Unit length, y up. */
-const vec2 BLOCK_LIGHT_DIR = vec2(-0.6, 0.8);
+const float BLOCK_CORNER_RADIUS = 0.18;
+const float BLOCK_TUBE = 0.15;
+const float BLOCK_GLASS = 0.34;
+const float BLOCK_BLEED = 0.14;
+const float BLOCK_BLEED_GAIN = 0.55;
+const float BLOCK_CORE_GAIN = 0.30;
+const float BLOCK_INNER_LINE = 0.32;
+const float BLOCK_INNER_LINE_GAIN = 0.35;
+const float BLOCK_MITER_GAIN = 0.18;
 
 /*
  * The sheen is a soft diagonal band of light that sweeps across the whole
@@ -94,6 +103,9 @@ const float GHOST_SCAN_ALPHA = 0.10;
 const float BEAM_STREAKS = 1.2;
 const float BEAM_STREAK_SPEED = 2.5;
 
+/* How strong the glow around a neon shape is next to the shape. */
+const float NEON_GLOW_ALPHA = 0.55;
+
 const float PI = 3.14159265;
 
 /* Coverage of a band of the given width, measured from the edge at distance d. */
@@ -123,19 +135,6 @@ float rounded_box_distance(vec2 p, vec2 half_size, float radius)
 {
     vec2 q = abs(p) - half_size + radius;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-}
-
-/*
- * Outward normal of the box side nearest to p, for a box centered on the
- * origin. Two bevels meet in a sharp diagonal miter, also in the rounded
- * corners: a normal that turned with the corner would pass through side-on
- * light there and leave a bright dot between the lit and the shaded bevel.
- */
-vec2 nearest_side_normal(vec2 p, vec2 half_size)
-{
-    vec2 q = abs(p) - half_size;
-    vec2 n = q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-    return n * sign(p);
 }
 
 /* Light the screen-space sheen adds at this fragment. */
@@ -199,9 +198,9 @@ float block_sparkle(float seed)
 }
 
 /*
- * A jewel block: rounded corners, a beveled rim lit from the top left, four
- * shallow facets around a flat table, a glassy reflection, a specular spot,
- * the moving sheen and, with a seed in p1, sparkles.
+ * A neon glass block: see the BLOCK_* constants. On top come the moving
+ * sheen and, with a seed in p1, sparkles. p0 is the tube width in pixels
+ * (0 = BLOCK_TUBE of the shorter side).
  */
 vec4 style_block()
 {
@@ -211,83 +210,80 @@ vec4 style_block()
     float shorter = min(v_size.x, v_size.y);
 
     float radius = BLOCK_CORNER_RADIUS * shorter;
-    float bevel = v_params.x > 0.0 ? v_params.x : BLOCK_BEVEL * shorter;
+    float tube = v_params.x > 0.0 ? v_params.x : BLOCK_TUBE * shorter;
     /* The upper bound can fall below a pixel in degenerate windows; clamping
        to at least 1.0 keeps the bounds ordered (GLSL clamp is undefined when
        minVal > maxVal). */
-    bevel = clamp(bevel, 1.0, max(1.0, 0.45 * shorter));
-    float table = max(BLOCK_TABLE_INSET * shorter, bevel + 1.0);
+    tube = clamp(tube, 1.0, max(1.0, 0.45 * shorter));
 
     float edge_distance = rounded_box_distance(p, half_size, radius);
     float coverage = 1.0 - smoothstep(-EDGE_AA, EDGE_AA, edge_distance);
     float inside = -edge_distance;
-    /* Distance in from the nearest straight side; the facets are cut square. */
+    vec3 base = v_color.rgb;
+
+    /* Glass: dark, lit by the tube's light bleeding in and by the middle. */
+    float bleed = exp(-max(inside - tube, 0.0) / (BLOCK_BLEED * shorter));
+    float middle = 1.0 - smoothstep(0.0, 0.5, length(v_uv - vec2(0.5)));
+    vec3 color = base * (BLOCK_GLASS + BLOCK_BLEED_GAIN * bleed + BLOCK_CORE_GAIN * middle);
+
+    /* The inner line and the miters from its corners to the block's corners,
+       cut square like the jewel's table and facets were. */
     float side_inside = min(half_size.x - abs(p.x), half_size.y - abs(p.y));
-    float facing = dot(nearest_side_normal(p, half_size), BLOCK_LIGHT_DIR);
+    float line_at = BLOCK_INNER_LINE * shorter;
+    float inner_line = 1.0 - smoothstep(0.3, 1.0, abs(side_inside - line_at));
+    float miter = (1.0 - smoothstep(0.2, 0.8, abs(abs(p.x) - abs(p.y)) * 0.70710678)) *
+                  step(tube, side_inside) * step(side_inside, line_at);
+    color += base * (BLOCK_INNER_LINE_GAIN * inner_line + BLOCK_MITER_GAIN * miter);
 
-    /* Table: the piece color, brighter towards the top left, with a soft
-       light in the middle as if the jewel were lit from inside. */
-    float diagonal = clamp(0.5 + 0.5 * (v_uv.y - v_uv.x), 0.0, 1.0);
-    vec3 face = v_color.rgb * mix(0.78, 1.12, diagonal);
-    float inner_light = 1.0 - smoothstep(0.0, 0.45, length(v_uv - vec2(0.5)));
-    face = mix(face, mix(v_color.rgb, vec3(1.0), 0.35), 0.35 * inner_light);
+    /* The tube: brightest along its center line, where it goes towards white. */
+    float on_tube = 1.0 - smoothstep(tube - EDGE_AA, tube + EDGE_AA, inside);
+    float hot = clamp(1.0 - abs(inside - 0.5 * tube) / (0.5 * tube), 0.0, 1.0);
+    vec3 tube_color = mix(base * 1.1, vec3(1.0), 0.55 * hot * hot);
+    color = mix(color, tube_color, on_tube);
 
-    /* Facets: lit like the rim but much softer, so they read as a shallow
-       slope. A thin bright crease marks the table edge on the lit sides. */
-    float on_facet = 1.0 - smoothstep(table - EDGE_AA, table + EDGE_AA, side_inside);
-    vec3 facet_color = facing >= 0.0
-                           ? mix(v_color.rgb, vec3(1.0), 0.28 * facing)
-                           : v_color.rgb * (1.0 + 0.42 * facing);
-    facet_color *= mix(0.9, 1.05, diagonal);
-    face = mix(face, facet_color, on_facet);
-    float crease = 1.0 - smoothstep(0.0, 1.0, abs(side_inside - table));
-    face = mix(face, vec3(1.0), 0.45 * crease * max(facing, 0.0));
-
-    /* Glassy reflection: a soft-edged lighter area over the upper left half,
-       cut by a diagonal line, fading towards that line. */
-    float reflection_edge = (1.0 - v_uv.x) * 0.9 + v_uv.y - 1.05;
-    float reflection = smoothstep(0.0, 0.06, reflection_edge) * mix(0.08, 0.20, v_uv.y);
-    face = mix(face, vec3(1.0), reflection);
-
-    /* Specular spot near the top left of the table. */
-    vec2 spot = (v_uv - vec2(0.34, 0.68)) / vec2(0.16, 0.11);
-    float specular = pow(clamp(1.0 - length(spot), 0.0, 1.0), 1.6);
-    face = mix(face, vec3(1.0), 0.8 * specular);
-
-    /* Bevel: a rim lit or shaded by how its side faces the light. The lit
-       sides go towards white, the others towards a darker shade of the hue,
-       so the colors stay saturated. */
-    float rim = 1.0 - smoothstep(bevel - EDGE_AA, bevel + EDGE_AA, inside);
-    vec3 rim_color = facing >= 0.0
-                         ? mix(v_color.rgb, vec3(1.0), 0.55 * facing)
-                         : v_color.rgb * (1.0 + 0.65 * facing);
-    vec3 color = mix(face, rim_color, rim);
-
-    /* A thin dark line along the outer edge keeps neighbors apart. */
-    float outer_line = 1.0 - smoothstep(0.0, 1.2, inside);
-    color = mix(color, v_color.rgb * 0.25, 0.6 * outer_line);
-
-    /* The sheen adds light, a little less on the rim than on the face. The
+    /* The sheen adds light, a little less on the tube than on the glass. The
        sparkle is white with a hint of the piece color. */
-    color += vec3(block_sheen() * mix(1.0, 0.6, rim));
-    color += mix(vec3(1.0), v_color.rgb, 0.2) * block_sparkle(v_params.y);
+    color += vec3(block_sheen() * mix(1.0, 0.6, on_tube));
+    color += mix(vec3(1.0), base, 0.2) * block_sparkle(v_params.y);
 
     return vec4(min(color, vec3(1.0)), v_color.a * coverage);
 }
 
-vec4 style_outline()
+/*
+ * Neon: a glowing tube along a rounded rectangle, or, with p0 = 0, a glowing
+ * filled rounded rectangle. The rect includes the glow: the shape sits p1
+ * pixels in from every side, and the glow fades out over those p1 pixels.
+ * p0 is the tube width in pixels, p2 the corner radius in pixels. The tube is
+ * brightest along its center line, where it goes towards white; the glow
+ * keeps the color. Meant for additive blending.
+ */
+vec4 style_neon()
 {
-    vec2 px = v_uv * v_size;
-    float shorter = min(v_size.x, v_size.y);
-    float border = v_params.x > 0.0 ? v_params.x : max(1.0, 0.08 * shorter);
-    border = clamp(border, 1.0, max(1.0, 0.45 * shorter));
+    vec2 half_size = 0.5 * v_size;
+    vec2 p = v_uv * v_size - half_size;
+    float reach = max(v_params.y, 0.0);
+    vec2 shape_half = max(half_size - reach, vec2(0.5));
+    float radius = clamp(v_params.z, 0.0, min(shape_half.x, shape_half.y));
 
-    float d = min(min(px.x, v_size.x - px.x), min(px.y, v_size.y - px.y));
-    float border_coverage = edge_coverage(d, border);
-    float fill_alpha = clamp(v_params.y, 0.0, 1.0);
+    float d = rounded_box_distance(p, shape_half, radius);
+    float hot = 1.0;
+    float tube = max(v_params.x, 0.0);
+    if (tube > 0.0) {
+        float half_tube = 0.5 * tube;
+        hot = clamp(1.0 - abs(d) / half_tube, 0.0, 1.0);
+        d = abs(d) - half_tube;
+    }
 
-    float alpha = max(border_coverage, fill_alpha);
-    return vec4(v_color.rgb, v_color.a * alpha);
+    float core = 1.0 - smoothstep(-EDGE_AA, EDGE_AA, d);
+    float glow = 0.0;
+    if (reach > 0.0) {
+        float out_distance = max(d, 0.0) / reach;
+        glow = exp(-3.0 * out_distance) * clamp(1.0 - out_distance, 0.0, 1.0);
+    }
+
+    vec3 color = mix(v_color.rgb, vec3(1.0), 0.6 * core * hot * hot);
+    float alpha = max(core, NEON_GLOW_ALPHA * glow);
+    return vec4(color, v_color.a * alpha);
 }
 
 vec4 style_glow()
@@ -391,8 +387,8 @@ void main()
 {
     if (v_style == STYLE_BLOCK) {
         frag_color = style_block();
-    } else if (v_style == STYLE_OUTLINE) {
-        frag_color = style_outline();
+    } else if (v_style == STYLE_NEON) {
+        frag_color = style_neon();
     } else if (v_style == STYLE_GLOW) {
         frag_color = style_glow();
     } else if (v_style == STYLE_GHOST) {

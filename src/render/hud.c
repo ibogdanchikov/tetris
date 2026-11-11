@@ -7,19 +7,24 @@
 #include "render/font.h"
 #include "render/text.h"
 
-static const Color HUD_FRAME_COLOR = { 0.32f, 0.32f, 0.38f, 1.00f };
-static const Color HUD_BOX_COLOR = { 0.06f, 0.06f, 0.08f, 1.00f };
-static const Color HUD_LABEL_COLOR = { 0.58f, 0.58f, 0.66f, 1.00f };
-static const Color HUD_VALUE_COLOR = { 0.92f, 0.92f, 0.96f, 1.00f };
-static const Color HUD_OVERLAY_COLOR = { 0.00f, 0.00f, 0.00f, 0.72f };
-static const Color HUD_OVERLAY_TITLE_COLOR = { 0.96f, 0.96f, 0.99f, 1.00f };
-static const Color HUD_OVERLAY_HINT_COLOR = { 0.66f, 0.66f, 0.74f, 1.00f };
+/*
+ * Neon signage: cyan labels with a cyan glow, near-white values with the same
+ * glow, and a pink title on the overlays. Each glow color's alpha is its
+ * strength.
+ */
+static const Color HUD_BOX_COLOR = { 0.018f, 0.020f, 0.035f, 1.00f };
+static const Color HUD_LABEL_COLOR = { 0.45f, 0.85f, 1.00f, 1.00f };
+static const Color HUD_LABEL_GLOW = { 0.20f, 0.78f, 1.00f, 0.45f };
+static const Color HUD_VALUE_COLOR = { 0.92f, 0.97f, 1.00f, 1.00f };
+static const Color HUD_VALUE_GLOW = { 0.20f, 0.78f, 1.00f, 0.35f };
+static const Color HUD_OVERLAY_COLOR = { 0.00f, 0.00f, 0.02f, 0.75f };
+static const Color HUD_OVERLAY_TITLE_COLOR = { 1.00f, 0.55f, 0.90f, 1.00f };
+static const Color HUD_OVERLAY_TITLE_GLOW = { 1.00f, 0.25f, 0.80f, 0.60f };
+static const Color HUD_OVERLAY_HINT_COLOR = { 0.45f, 0.85f, 1.00f, 1.00f };
+static const Color HUD_OVERLAY_HINT_GLOW = { 0.20f, 0.78f, 1.00f, 0.35f };
 
 /* Empty text pixels between a stat label and its value. */
 #define HUD_STAT_VALUE_GAP_PIXELS 3
-
-/* Solid frame around a HUD box is a quarter cell wide, like the playfield. */
-#define HUD_FRAME_CELLS 0.25f
 
 /* Brightness of the grey used for a hold piece that is spent until the next lock. */
 #define HUD_HOLD_GREY_FACTOR 0.75f
@@ -30,11 +35,10 @@ static int hud_padding(const BoardLayout *layout)
     return pad > 0 ? pad : 1;
 }
 
+/* A HUD box has the same neon frame as the playfield, without the pulse. */
 static void hud_draw_box(Renderer *renderer, LayoutRect box, int cell_size)
 {
-    const float frame = (float)cell_size * HUD_FRAME_CELLS;
-    renderer_push_rect(renderer, box.x - frame, box.y - frame, box.w + 2.0f * frame,
-                       box.h + 2.0f * frame, HUD_FRAME_COLOR);
+    board_view_draw_neon_frame(renderer, box, cell_size, 0.0f);
     renderer_push_rect(renderer, box.x, box.y, box.w, box.h, HUD_BOX_COLOR);
 }
 
@@ -58,7 +62,7 @@ static void hud_draw_hold(Renderer *renderer, const BoardLayout *layout, const G
     text_draw_centered(renderer, layout->hold_box.x,
                        layout->hold_box.y + layout->hold_box.h - (float)layout->cell_size,
                        layout->hold_box.w, (float)layout->cell_size, layout->text_pixel,
-                       HUD_LABEL_COLOR, "HOLD");
+                       HUD_LABEL_COLOR, HUD_LABEL_GLOW, "HOLD");
 
     if (!game->has_hold) {
         return;
@@ -78,7 +82,7 @@ static void hud_draw_next(Renderer *renderer, const BoardLayout *layout, const G
     text_draw_centered(renderer, layout->next_box.x,
                        layout->next_box.y + layout->next_box.h - (float)layout->cell_size,
                        layout->next_box.w, (float)layout->cell_size, layout->text_pixel,
-                       HUD_LABEL_COLOR, "NEXT");
+                       HUD_LABEL_COLOR, HUD_LABEL_GLOW, "NEXT");
 
     for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
         const PieceType type = game->next_queue[i];
@@ -102,9 +106,10 @@ static void hud_draw_stat(Renderer *renderer, const BoardLayout *layout, float x
         (int)layout->stats_area.w - 2 * hud_padding(layout), (int)strlen(value), label_pixel);
     const float value_height = (float)(FONT_GLYPH_H * value_pixel);
 
-    text_draw(renderer, x, top - label_height, label_pixel, HUD_LABEL_COLOR, label);
+    text_draw(renderer, x, top - label_height, label_pixel, HUD_LABEL_COLOR, HUD_LABEL_GLOW,
+              label);
     text_draw(renderer, x, top - label_height - value_gap - value_height, value_pixel,
-              HUD_VALUE_COLOR, value);
+              HUD_VALUE_COLOR, HUD_VALUE_GLOW, value);
 }
 
 static void hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const GameState *game)
@@ -152,9 +157,9 @@ static void hud_draw_overlay(Renderer *renderer, const BoardLayout *layout, cons
 
     text_draw_centered(renderer, layout->origin_x, bottom + hint_height + gap,
                        (float)layout->width, title_height, title_pixel, HUD_OVERLAY_TITLE_COLOR,
-                       title);
+                       HUD_OVERLAY_TITLE_GLOW, title);
     text_draw_centered(renderer, layout->origin_x, bottom, (float)layout->width, hint_height,
-                       hint_pixel, HUD_OVERLAY_HINT_COLOR, hint);
+                       hint_pixel, HUD_OVERLAY_HINT_COLOR, HUD_OVERLAY_HINT_GLOW, hint);
 }
 
 void hud_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game, bool paused)

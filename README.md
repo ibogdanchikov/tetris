@@ -407,24 +407,28 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
   no drawing code needs to know about the offset.
 - Particles and trails are drawn with `RECT_STYLE_GLOW` and additive blending and
   clipped to half a cell around the playfield, so a burst never paints over the
-  HUD. The lock flash and the level-up frame pulse are the only alpha-blended
-  effects.
+  HUD. The lock flash is the only alpha-blended effect; the level-up pulse
+  brightens the additive neon frame.
 - Pixel coordinates in the renderer have their origin in the **bottom-left**
   corner, which matches board row 0 being the bottom row.
 - The layout centres the left panel, playfield and right panel as one group, so
   both panels keep a one-cell gap at every window size. Panels are four cells
   wide and top-aligned with the playfield.
-- The HUD is drawn from rectangles too: one per run of lit font pixels. There are
-  no textures and no font files. Values longer than the stats panel shrink their
-  glyph size instead of running over the board.
+- The HUD is drawn from rectangles too: one per run of lit font pixels, plus a
+  neon glow per run behind the letters. There are no textures and no font files.
+  Values longer than the stats panel shrink their glyph size instead of running
+  over the board.
 - Every quad instance is three `vec4`s: rect, colour and
   `(style, p0, p1, p2)`. Styles are chosen in `quad.frag`, so a beveled cell
   costs exactly the same one instance as a flat rectangle. `renderer_push_rect`
   is the flat convenience; `renderer_push_styled` selects any other style.
-  Locked cells, the active piece and the HUD previews are jewel blocks, the
-  ghost is a hologram silhouette (`RECT_STYLE_GHOST`) with a beam of light
-  (`RECT_STYLE_BEAM`) falling to it from the piece, the piece has a glow halo,
-  and frames, overlays, grid cells and text stay flat.
+  The look is neon arcade, and every light comes from the shapes themselves:
+  locked cells, the active piece and the HUD previews are neon glass blocks
+  with a soft glow around them, the ghost is a hologram silhouette
+  (`RECT_STYLE_GHOST`) with a beam of light (`RECT_STYLE_BEAM`) falling to it
+  from the piece, the piece has a stronger halo, and the board and the HUD boxes
+  have neon tube frames (`RECT_STYLE_NEON`). Text glows; grid cells and the
+  overlay dimming stay flat.
 - Blending is GL state: `renderer_set_blend` flushes the batch before it
   changes, and `renderer_begin` resets it to alpha every frame.
 - The animated background is one full-screen triangle generated from
