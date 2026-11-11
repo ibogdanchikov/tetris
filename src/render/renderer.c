@@ -99,6 +99,8 @@ static bool renderer_load_quad_program(Renderer *renderer)
     }
     renderer->program = program;
     renderer->viewport_uniform = viewport_uniform;
+    /* Optional: a shader without u_time gets -1, and setting -1 is a no-op. */
+    renderer->time_uniform = glGetUniformLocation(program, "u_time");
     return true;
 }
 
@@ -212,10 +214,11 @@ bool renderer_init(Renderer *renderer, const char *shader_dir)
     return true;
 }
 
-void renderer_begin(Renderer *renderer, int fb_w, int fb_h)
+void renderer_begin(Renderer *renderer, int fb_w, int fb_h, float time_seconds)
 {
     renderer->viewport_width = fb_w;
     renderer->viewport_height = fb_h;
+    renderer->time_seconds = time_seconds;
 
     glViewport(0, 0, fb_w, fb_h);
     glDisable(GL_DEPTH_TEST);
@@ -232,9 +235,10 @@ void renderer_begin(Renderer *renderer, int fb_w, int fb_h)
 
     glUseProgram(renderer->program);
     glUniform2f(renderer->viewport_uniform, (float)fb_w, (float)fb_h);
+    glUniform1f(renderer->time_uniform, time_seconds);
 }
 
-void renderer_draw_background(Renderer *renderer, float time_seconds)
+void renderer_draw_background(Renderer *renderer)
 {
     if (renderer->background_program == 0) {
         return;
@@ -246,7 +250,7 @@ void renderer_draw_background(Renderer *renderer, float time_seconds)
     glUseProgram(renderer->background_program);
     glUniform2f(renderer->background_resolution_uniform, (float)renderer->viewport_width,
                 (float)renderer->viewport_height);
-    glUniform1f(renderer->background_time_uniform, time_seconds);
+    glUniform1f(renderer->background_time_uniform, renderer->time_seconds);
 
     glBindVertexArray(renderer->background_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -320,6 +324,7 @@ bool renderer_reload_shaders(Renderer *renderer)
         glUseProgram(renderer->program);
         glUniform2f(renderer->viewport_uniform, (float)renderer->viewport_width,
                     (float)renderer->viewport_height);
+        glUniform1f(renderer->time_uniform, renderer->time_seconds);
     }
     return quad_ok;
 }

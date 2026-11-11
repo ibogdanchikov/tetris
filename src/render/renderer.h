@@ -19,9 +19,10 @@ typedef struct Color {
  * enum in step: the shader compares the style id against 0..3.
  *
  * RECT_STYLE_FLAT     a plain rectangle, exactly the old behaviour.
- * RECT_STYLE_BLOCK    a polished block: vertical gradient, light top/left bevel
- *                     and a dark bottom/right one. p0 is the bevel width in
- *                     pixels (0 = 12% of the shorter side).
+ * RECT_STYLE_BLOCK    a glossy block: rounded corners, a bevel lit from the top
+ *                     left, a reflection and specular spot on the face, and a
+ *                     sheen that sweeps across the screen over time. p0 is the
+ *                     bevel width in pixels (0 = 15% of the shorter side).
  * RECT_STYLE_OUTLINE  a border of p0 pixels (0 = 8% of the shorter side) and an
  *                     optional fill of p1 alpha (0.0 = hollow).
  * RECT_STYLE_GLOW     a round radial falloff for particles. p0 is the hardness
@@ -48,10 +49,12 @@ typedef struct Renderer {
     GLuint quad_vbo;
     GLuint instance_vbo;
     GLint viewport_uniform;
+    GLint time_uniform; /* -1 when the quad shader does not use u_time */
     GLint background_resolution_uniform;
     GLint background_time_uniform;
     int viewport_width;
     int viewport_height;
+    float time_seconds; /* presentation time of the current frame */
     int capacity;
     int count;
     RenderBlend blend;
@@ -70,19 +73,21 @@ typedef struct Renderer {
 bool renderer_init(Renderer *renderer, const char *shader_dir);
 
 /*
- * Starts a frame: sets the viewport, clears to the background colour, resets the
+ * Starts a frame: sets the viewport, clears to the background color, resets the
  * blend mode to alpha and binds the quad program. All rectangles pushed
  * afterwards are in pixel coordinates with the origin in the bottom-left corner
- * of the framebuffer.
+ * of the framebuffer. time_seconds is presentation-only time: it drives the
+ * background drift and the block sheen, never the game.
  */
-void renderer_begin(Renderer *renderer, int fb_w, int fb_h);
+void renderer_begin(Renderer *renderer, int fb_w, int fb_h, float time_seconds);
 
 /*
- * Draws the full-screen animated background. Call it right after renderer_begin,
- * before any rectangles; time_seconds drives the drift. Does nothing when there
- * is no background program at all; a failed reload keeps the previous one.
+ * Draws the full-screen animated background at the time given to
+ * renderer_begin. Call it right after renderer_begin, before any rectangles.
+ * Does nothing when there is no background program at all; a failed reload
+ * keeps the previous one.
  */
-void renderer_draw_background(Renderer *renderer, float time_seconds);
+void renderer_draw_background(Renderer *renderer);
 
 /* Queues one flat axis-aligned rectangle. Flushes early if the batch is full. */
 void renderer_push_rect(Renderer *renderer, float x, float y, float w, float h, Color color);

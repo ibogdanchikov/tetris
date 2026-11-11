@@ -73,7 +73,7 @@ static void board_view_push_cell(Renderer *renderer, float x, float y, float cel
     board_view_push_cell_styled(renderer, x, y, cell, color, RECT_STYLE_FLAT, 0.0f, 0.0f, 0.0f);
 }
 
-/* Bevel width passed to STYLE_BLOCK: 0 lets the shader use 12% of the cell. */
+/* Bevel width passed to STYLE_BLOCK: 0 lets the shader use 15% of the cell. */
 static void board_view_push_block(Renderer *renderer, float x, float y, float cell, Color color)
 {
     board_view_push_cell_styled(renderer, x, y, cell, color, RECT_STYLE_BLOCK, 0.0f, 0.0f, 0.0f);

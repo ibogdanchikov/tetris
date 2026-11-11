@@ -33,7 +33,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Presentation reads state and never writes it.** The views take `const GameState *`. The effects layer has its own `Fx` state and its own splitmix64 generator, so particles cannot change the piece order. Pause is app state in `main.c`, not part of `GameState`.
 
-**There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` adds a bevel and a vertical gradient, `RECT_STYLE_OUTLINE` draws a border with an optional fill, and `RECT_STYLE_GLOW` draws a radial falloff for particles. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
+**There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` draws a glossy block with rounded corners, a lit bevel, a reflection, a specular spot and a sheen that sweeps across the screen every few seconds, `RECT_STYLE_OUTLINE` draws a border with an optional fill, and `RECT_STYLE_GLOW` draws a radial falloff for particles. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
 
 **GLAD is vendored and loaded through SDL.** `gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)` runs in `platform_init` after the context is current. The project never links `libGL`; `libgl-dev` is only needed for the driver headers.
 
@@ -138,8 +138,8 @@ int board_layout_fit_text_pixel(int width, int glyph_count, int preferred);
 
 ```c
 bool renderer_init(Renderer *renderer, const char *shader_dir);
-void renderer_begin(Renderer *renderer, int fb_w, int fb_h);
-void renderer_draw_background(Renderer *renderer, float time_seconds);
+void renderer_begin(Renderer *renderer, int fb_w, int fb_h, float time_seconds);
+void renderer_draw_background(Renderer *renderer);
 void renderer_push_rect(Renderer *renderer, float x, float y, float w, float h, Color color);
 void renderer_push_styled(Renderer *renderer, float x, float y, float w, float h, Color color,
                           RectStyle style, float p0, float p1, float p2);
@@ -151,7 +151,7 @@ void renderer_end(Renderer *renderer);
 void renderer_shutdown(Renderer *renderer);
 ```
 
-`renderer_begin` sets the viewport, clears to the background color, resets the blend mode to alpha and binds the quad program. Rectangles are in pixels with a bottom-left origin. `renderer_end` flushes what is still queued. `renderer_shutdown` is safe to call twice.
+`renderer_begin` sets the viewport, clears to the background color, resets the blend mode to alpha and binds the quad program. Its `time_seconds` is presentation-only time; the background and the block sheen read it, the game never does. Rectangles are in pixels with a bottom-left origin. `renderer_end` flushes what is still queued. `renderer_shutdown` is safe to call twice.
 
 ```c
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,
@@ -214,7 +214,7 @@ One iteration of the loop in `main.c`:
 4. If paused, reset the input buffer and the accumulator so no key pressed during the pause fires on resume. Otherwise add `frame_time` to the accumulator and, while it holds a full `SIM_DT`, call `input_buffer_take`, then `game_step`, and OR `game.events` into `frame_events`.
 5. If not paused, call `fx_on_events(&fx, frame_events, &game)` and `fx_update(&fx, frame_time)`. Call `sound_map_events`, drop move sounds that arrive less than `APP_MOVE_SOUND_TICKS` (6) ticks after the last one, and hand the rest to `audio_play`.
 6. Compute `alpha`, read the drawable size, compute the layout, and translate it by the shake offset times the cell size. The shake is skipped while paused.
-7. `renderer_begin`, `renderer_draw_background` with `SDL_fmod(now, 3600.0)`, `board_view_draw`, `fx_view_draw`, `hud_draw`, `renderer_end`.
+7. `renderer_begin` with `SDL_fmod(now, 3600.0)`, `renderer_draw_background`, `board_view_draw`, `fx_view_draw`, `hud_draw`, `renderer_end`.
 8. On the last frame, call `screenshot_save_bmp` before `platform_swap`, because the back buffer is undefined after the swap. Then swap.
 9. After the loop, shut down audio, renderer and platform.
 

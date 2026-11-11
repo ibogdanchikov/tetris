@@ -412,9 +412,9 @@ int main(int argc, char **argv)
                                    shake_y * (float)layout.cell_size);
         }
 
-        renderer_begin(&renderer, fb_width, fb_height);
         /* Presentation-only time, wrapped to an hour so float precision holds. */
-        renderer_draw_background(&renderer, (float)SDL_fmod(now, 3600.0));
+        renderer_begin(&renderer, fb_width, fb_height, (float)SDL_fmod(now, 3600.0));
+        renderer_draw_background(&renderer);
         board_view_draw(&renderer, &layout, &game, alpha, fx_level_pulse_amount(&fx));
         fx_view_draw(&renderer, &layout, &fx);
         hud_draw(&renderer, &layout, &game, paused);

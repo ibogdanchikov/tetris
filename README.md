@@ -428,7 +428,7 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
   changes, and `renderer_begin` resets it to alpha every frame.
 - The animated background is one full-screen triangle generated from
   `gl_VertexID` with an empty VAO. Its time comes from the app, is presentation
-  only and wraps at an hour. A missing or broken background shader is not
+  only and wraps at an hour. The block sheen in `quad.frag` uses the same time. A missing or broken background shader is not
   fatal: the flat clear colour shows through and F5 can bring it back.
 - Shader reloading is intentionally forgiving: `renderer_reload_shaders` only
   swaps a program in after it compiled and linked, so F5 over a typo keeps the
