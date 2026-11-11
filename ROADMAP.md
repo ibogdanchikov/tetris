@@ -46,7 +46,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - The full game loop: spawn, gravity, soft and hard drop, SRS rotation with kicks, hold, next queue, lock delay, line clears, scoring and levels.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
-- Block-styled tetrominoes, ghost outline, clear animation, particles, trails, shake, background shader and F5 reload.
+- A neon arcade look: glass blocks lit from inside with a sweeping sheen and random sparkles, a hologram ghost with a beam of light down to it, a glow around the active piece, neon tube frames and glowing text. Also the clear animation, particles, trails, shake, background shader and F5 reload.
 - Synthesized sound for moves, rotation, hold, hard drop, lock, line clears, level up, game over and pause. `M` mutes; `--mute` starts muted.
 - Command-line flags: `--frames`, `--screenshot`, `--assets`, `--size`, `--seed`, `--mute`, `--help`.
 
