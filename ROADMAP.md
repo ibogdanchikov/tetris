@@ -149,7 +149,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - The fonts cover only space, A-Z, 0-9 and `: . - ! ? < >`; lowercase uses the uppercase glyph and other characters are skipped, so a key name such as `[` shows as a gap on the controls screen.
 - One music track, looping the whole time, the same in menus and in play. Mute (`M`) is not saved; only the volume and the music level are.
 - No player names in the score table, and no way to clear it short of deleting `save.txt`.
-- No gamepad, replay or CI. Only Linux is packaged, as a single x86_64 binary built by `packaging/linux/build.sh` and released by `.github/workflows/release.yml`.
+- No gamepad, replay or CI. Releases are built only when a tag is pushed: a single x86_64 binary for Linux, a single x86_64 `.exe` for Windows and a universal `Tetris.app` in a `.dmg` for macOS, by the scripts under `packaging/` and `.github/workflows/release.yml`. Neither the Windows nor the macOS build is signed with a paid certificate, so both systems warn before the first launch.
 
 ### Rough edges
 

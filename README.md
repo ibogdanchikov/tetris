@@ -4,7 +4,13 @@ A small falling-block puzzle game in C17 with SDL3, OpenGL 3.3 core and GLAD.
 
 See `ARCHITECTURE.md` for modules and design decisions, and `ROADMAP.md` for completed and planned milestones.
 
-## Download and play (Linux)
+## Download and play
+
+Every release has the game for Linux, Windows and macOS. Nothing else needs to
+be installed: SDL3 and the shaders are built in. The controls are listed under
+[Controls](#controls).
+
+### Linux
 
 Download the game as a single file, make it executable and run it:
 
@@ -14,10 +20,30 @@ chmod +x tetris-linux-x86_64
 ./tetris-linux-x86_64
 ```
 
-Nothing else needs to be installed. The file is a 64-bit x86 executable with
-SDL3 and the shaders built in. It needs glibc 2.34 or newer (Ubuntu 22.04,
-Debian 12, Fedora 35 or later), an X11 or Wayland desktop and an OpenGL 3.3
-driver. The controls are listed under [Controls](#controls).
+The file is a 64-bit x86 executable. It needs glibc 2.34 or newer (Ubuntu
+22.04, Debian 12, Fedora 35 or later), an X11 or Wayland desktop and an OpenGL
+3.3 driver.
+
+### Windows
+
+Download
+[tetris-windows-x86_64.exe](https://github.com/ibogdanchikov/tetris/releases/latest/download/tetris-windows-x86_64.exe)
+and run it. It is a single 64-bit executable and needs an OpenGL 3.3 driver.
+
+The file is not code-signed, so on the first run Windows may say that it
+protected your PC. Click **More info**, then **Run anyway**.
+
+### macOS
+
+Download
+[tetris-macos.dmg](https://github.com/ibogdanchikov/tetris/releases/latest/download/tetris-macos.dmg),
+open it and drag Tetris to Applications. The app runs on Apple silicon and
+Intel Macs with macOS 11 or later.
+
+The app is not notarized by Apple, so macOS refuses the first launch and says
+it could not verify the app. Click **Done**, open **System Settings › Privacy &
+Security**, and click **Open Anyway** next to the message about Tetris. After
+that it opens like any other app.
 
 **Milestone 1** is the skeleton only: a window, a GL context, an instanced quad
 renderer, a playfield view and a fixed-timestep loop.
@@ -155,22 +181,45 @@ Useful cache options:
 | `TETRIS_WARNINGS_AS_ERRORS` | `OFF` | Turn the project's warning set into errors |
 | `TETRIS_ENABLE_SANITIZERS` | `OFF` | Build with ASan + UBSan |
 
-### Linux release binary
+### Release builds
+
+Each platform has a script that builds the file behind its download link above,
+with SDL3 compiled as a static library and linked in.
 
 ```sh
 packaging/linux/build.sh
 ```
 
-This builds `dist/tetris-linux-x86_64`, the file behind the download link above.
-It needs only Docker: the build runs in an Ubuntu 22.04 image
-(`packaging/linux/Dockerfile`) with SDL3 compiled as a static library, so the
-binary links nothing but glibc. SDL still opens X11, Wayland, OpenGL, PipeWire,
-PulseAudio and ALSA at run time with `dlopen`, so the player's own drivers are
-used. The script also runs the tests and prints the binary's shared libraries
-and the newest glibc version it needs.
+This builds `dist/tetris-linux-x86_64`. It needs only Docker: the build runs in
+an Ubuntu 22.04 image (`packaging/linux/Dockerfile`), so the binary links
+nothing but glibc. SDL still opens X11, Wayland, OpenGL, PipeWire, PulseAudio
+and ALSA at run time with `dlopen`, so the player's own drivers are used. The
+script also runs the tests and prints the binary's shared libraries and the
+newest glibc version it needs.
 
-`.github/workflows/release.yml` runs the same script. Pushing a `v*` tag publishes
-the binary on a GitHub release:
+```sh
+packaging/windows/build.sh
+```
+
+This builds `dist/tetris-windows-x86_64.exe`. It also needs only Docker: the
+build cross-compiles with MinGW-w64 in an Ubuntu 24.04 image
+(`packaging/windows/Dockerfile`) and links the C runtime support libraries
+statically, so the executable loads only DLLs that come with Windows; the
+script prints them. It is a GUI program, so no console window opens with it.
+The tests are built but not run, since the Linux build runs the same tests.
+
+```sh
+packaging/macos/build.sh
+```
+
+This builds `dist/tetris-macos.dmg` and has to run on a Mac with the Xcode
+command line tools, CMake and Git. It builds SDL3 and the game as universal
+binaries for Apple silicon and Intel with macOS 11 as the minimum, runs the
+tests, puts the executable in `Tetris.app` with an `Info.plist`, signs the app
+ad hoc and packs it in a disk image with a link to `/Applications`.
+
+`.github/workflows/release.yml` runs all three scripts. Pushing a `v*` tag
+publishes the three files on a GitHub release:
 
 ```sh
 git tag v0.1.0
