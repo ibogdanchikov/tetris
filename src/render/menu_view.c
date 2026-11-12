@@ -74,13 +74,42 @@ static void menu_view_draw_panel(Renderer *renderer, LayoutRect area, int cell_s
     renderer_push_rect(renderer, area.x, area.y, area.w, area.h, MENU_PANEL_COLOR);
 }
 
+/*
+ * The largest text size, up to preferred, at which `glyphs` characters fit in
+ * `width` pixels. With the font atlas text can be any size, so it fills the
+ * room exactly; the pixel font only has whole pixels, so the size is rounded
+ * down for it. Never below 1.
+ */
+static float menu_view_fit(const Renderer *renderer, float width, int glyphs, float preferred)
+{
+    float size = preferred;
+    if (glyphs > 0) {
+        const float units =
+            (float)(glyphs * (FONT_GLYPH_W + FONT_GLYPH_SPACING) - FONT_GLYPH_SPACING);
+        const float fit = width / units;
+        size = fit < size ? fit : size;
+    }
+    if (!renderer_has_font(renderer)) {
+        size = (float)(int)size;
+    }
+    return size < 1.0f ? 1.0f : size;
+}
+
+/* One step smaller, when a page is too tall: a quarter unit with the atlas, a
+   whole pixel with the pixel font. Never below 1. */
+static float menu_view_shrink(const Renderer *renderer, float size)
+{
+    const float smaller = size - (renderer_has_font(renderer) ? 0.25f : 1.0f);
+    return smaller < 1.0f ? 1.0f : smaller;
+}
+
 /* The neon bar behind a selected row or key slot. */
 static void menu_view_draw_bar(Renderer *renderer, float x, float y, float w, float h,
-                               int pixel)
+                               float pixel)
 {
-    const float pad = (float)(2 * pixel);
-    const float reach = (float)(2 * pixel);
-    float tube = 0.6f * (float)pixel;
+    const float pad = 2.0f * pixel;
+    const float reach = 2.0f * pixel;
+    float tube = 0.6f * pixel;
     if (tube < 1.5f) {
         tube = 1.5f;
     }
@@ -91,28 +120,35 @@ static void menu_view_draw_bar(Renderer *renderer, float x, float y, float w, fl
 
     renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
     renderer_push_styled(renderer, bx - reach, by - reach, bw + 2.0f * reach, bh + 2.0f * reach,
-                         MENU_BAR_FILL_COLOR, RECT_STYLE_NEON, 0.0f, reach, (float)(2 * pixel));
+                         MENU_BAR_FILL_COLOR, RECT_STYLE_NEON, 0.0f, reach, 2.0f * pixel);
     renderer_push_styled(renderer, bx - reach, by - reach, bw + 2.0f * reach, bh + 2.0f * reach,
-                         MENU_BAR_COLOR, RECT_STYLE_NEON, tube, reach, (float)(2 * pixel));
+                         MENU_BAR_COLOR, RECT_STYLE_NEON, tube, reach, 2.0f * pixel);
     renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
 }
 
 /* Space between a title and what follows it. */
-static float menu_view_title_gap(int pixel, int cell_size)
+static float menu_view_title_gap(float pixel, int cell_size)
 {
-    return (float)menu_view_max(3 * pixel, cell_size / 2);
+    const float gap = 3.0f * pixel;
+    const float half_cell = (float)cell_size * 0.5f;
+    return gap > half_cell ? gap : half_cell;
 }
 
-/* Glyph pixel size for the hint line at the bottom of a panel. */
-static int menu_view_hint_pixel(const char *hint, int width, int cell_size)
+/* Text size for the hint line at the bottom of a panel. */
+static float menu_view_hint_pixel(const Renderer *renderer, const char *hint, float width,
+                                  int cell_size)
 {
-    return board_layout_fit_text_pixel(width, (int)strlen(hint),
-                                       menu_view_max(1, (cell_size + 6) / 12));
+    return menu_view_fit(renderer, width, (int)strlen(hint), (float)(cell_size + 6) / 12.0f);
 }
 
-static float menu_view_text_width(const char *text, int pixel)
+/* Width of a string at a text size; font_text_width for any size. */
+static float menu_view_text_width(const char *text, float pixel)
 {
-    return (float)font_text_width(text, pixel);
+    const int glyphs = (int)strlen(text);
+    if (glyphs == 0) {
+        return 0.0f;
+    }
+    return (float)(glyphs * (FONT_GLYPH_W + FONT_GLYPH_SPACING) - FONT_GLYPH_SPACING) * pixel;
 }
 
 static float menu_view_round(float value)
@@ -120,7 +156,7 @@ static float menu_view_round(float value)
     return (float)(int)(value + (value >= 0.0f ? 0.5f : -0.5f));
 }
 
-static void menu_view_text_centered(Renderer *renderer, float x, float w, float y, int pixel,
+static void menu_view_text_centered(Renderer *renderer, float x, float w, float y, float pixel,
                                     Color color, Color glow, const char *text)
 {
     text_draw(renderer, menu_view_round(x + (w - menu_view_text_width(text, pixel)) * 0.5f), y,
@@ -190,9 +226,9 @@ static int menu_view_row_glyphs(const MenuViewState *state, MenuItem item)
 }
 
 static void menu_view_draw_row(Renderer *renderer, const MenuViewState *state, MenuItem item,
-                               bool selected, bool table, float x, float w, float y, int pixel)
+                               bool selected, bool table, float x, float w, float y, float pixel)
 {
-    const float height = (float)(FONT_GLYPH_H * pixel);
+    const float height = (float)FONT_GLYPH_H * pixel;
     if (selected) {
         menu_view_draw_bar(renderer, x, y, w, height, pixel);
     }
@@ -228,13 +264,13 @@ static void menu_view_draw_page(Renderer *renderer, const BoardLayout *layout,
     const int box_w = menu_view_min(inner, (int)page->row_box_width);
 
     /* Header. */
-    int title_pixel = 1;
+    float title_pixel = 1.0f;
     int piece_cell = 0;
     float header_h = 0.0f;
     if (page->title != NULL) {
-        title_pixel = board_layout_fit_text_pixel(inner, (int)strlen(page->title),
-                                                  menu_view_max(1, cell / 4));
-        header_h = (float)(FONT_GLYPH_H * title_pixel);
+        title_pixel = menu_view_fit(renderer, (float)inner, (int)strlen(page->title),
+                                    (float)cell / 4.0f);
+        header_h = (float)FONT_GLYPH_H * title_pixel;
     } else {
         piece_cell = menu_view_pieces_cell(layout, page->area);
         header_h = 3.0f * (float)piece_cell;
@@ -249,18 +285,21 @@ static void menu_view_draw_page(Renderer *renderer, const BoardLayout *layout,
         widest = menu_view_max(widest, (int)strlen(page->info[i]));
     }
 
-    int pixel = board_layout_fit_text_pixel(box_w, widest, menu_view_max(1, cell / 6));
+    float pixel = menu_view_fit(renderer, (float)box_w, widest, (float)cell / 6.0f);
     float pitch = 0.0f;
     float total = 0.0f;
-    int hint_pixel = 1;
+    float hint_pixel = 1.0f;
     for (;;) {
-        const float row_h = (float)(FONT_GLYPH_H * pixel);
-        hint_pixel = page->hint == NULL ? 1 : menu_view_hint_pixel(page->hint, inner, cell);
+        const float row_h = (float)FONT_GLYPH_H * pixel;
+        hint_pixel = page->hint == NULL
+                         ? 1.0f
+                         : menu_view_hint_pixel(renderer, page->hint, (float)inner, cell);
         const float gap = menu_view_title_gap(pixel, cell);
         const float fixed = header_h + gap + (float)page->info_count * row_h * 1.6f +
                             (page->info_count > 0 ? gap : 0.0f);
-        const float room = page->area.h - (float)cell -
-                           (page->hint != NULL ? (float)(FONT_GLYPH_H * hint_pixel + cell) : 0.0f);
+        const float room =
+            page->area.h - (float)cell -
+            (page->hint != NULL ? (float)FONT_GLYPH_H * hint_pixel + (float)cell : 0.0f);
 
         pitch = row_h * MENU_ROW_PITCH;
         total = fixed + (float)page->item_count * pitch;
@@ -268,16 +307,16 @@ static void menu_view_draw_page(Renderer *renderer, const BoardLayout *layout,
             pitch = row_h * MENU_ROW_PITCH_TIGHT;
             total = fixed + (float)page->item_count * pitch;
         }
-        if (total <= room || pixel <= 1) {
+        if (total <= room || pixel <= 1.0f) {
             break;
         }
-        --pixel;
+        pixel = menu_view_shrink(renderer, pixel);
     }
 
-    const float row_h = (float)(FONT_GLYPH_H * pixel);
+    const float row_h = (float)FONT_GLYPH_H * pixel;
     const float gap = menu_view_title_gap(pixel, cell);
     const float hint_room =
-        page->hint != NULL ? (float)(FONT_GLYPH_H * hint_pixel + cell) : 0.0f;
+        page->hint != NULL ? (float)FONT_GLYPH_H * hint_pixel + (float)cell : 0.0f;
     float top = page->area.y + hint_room + (page->area.h - hint_room + total) * 0.5f;
 
     if (page->title != NULL) {
@@ -426,34 +465,35 @@ static void menu_view_draw_controls(Renderer *renderer, const BoardLayout *layou
                 slot_glyphs, (int)strlen(state->key_name(settings->keys[action][slot])));
         }
     }
-    const int preferred = menu_view_max(1, cell / 6);
-    int pixel = menu_view_min(
-        board_layout_fit_text_pixel((int)label_w - cell / 2, label_glyphs, preferred),
-        board_layout_fit_text_pixel((int)slot_w - cell / 2, slot_glyphs, preferred));
+    const float preferred = (float)cell / 6.0f;
+    const float label_pixel =
+        menu_view_fit(renderer, label_w - (float)cell * 0.5f, label_glyphs, preferred);
+    const float slot_pixel =
+        menu_view_fit(renderer, slot_w - (float)cell * 0.5f, slot_glyphs, preferred);
+    float pixel = label_pixel < slot_pixel ? label_pixel : slot_pixel;
 
     const char *hint = menu->waiting_for_key ? "PRESS A KEY   ESC CANCEL"
                                              : "ENTER SET   DEL CLEAR   ESC BACK";
-    const int title_pixel = board_layout_fit_text_pixel(box_w, 8, menu_view_max(1, cell / 4));
-    const float title_h = (float)(FONT_GLYPH_H * title_pixel);
-    int hint_pixel = 1;
+    const float title_pixel = menu_view_fit(renderer, (float)box_w, 8, (float)cell / 4.0f);
+    const float title_h = (float)FONT_GLYPH_H * title_pixel;
+    const float hint_pixel = menu_view_hint_pixel(renderer, hint, (float)box_w, cell);
     float pitch = 0.0f;
     for (;;) {
-        const float row_h = (float)(FONT_GLYPH_H * pixel);
-        hint_pixel = menu_view_hint_pixel(hint, box_w, cell);
+        const float row_h = (float)FONT_GLYPH_H * pixel;
         const float room = area.h - (float)cell - title_h - menu_view_title_gap(pixel, cell) -
-                           (float)(FONT_GLYPH_H * hint_pixel + cell);
+                           ((float)FONT_GLYPH_H * hint_pixel + (float)cell);
         pitch = row_h * MENU_ROW_PITCH;
         if ((float)count * pitch > room) {
             pitch = row_h * MENU_ROW_PITCH_TIGHT;
         }
-        if ((float)count * pitch <= room || pixel <= 1) {
+        if ((float)count * pitch <= room || pixel <= 1.0f) {
             break;
         }
-        --pixel;
+        pixel = menu_view_shrink(renderer, pixel);
     }
 
-    const float row_h = (float)(FONT_GLYPH_H * pixel);
-    const float hint_room = (float)(FONT_GLYPH_H * hint_pixel + cell);
+    const float row_h = (float)FONT_GLYPH_H * pixel;
+    const float hint_room = (float)FONT_GLYPH_H * hint_pixel + (float)cell;
     const float title_gap = menu_view_title_gap(pixel, cell);
     const float total = title_h + title_gap + (float)count * pitch;
     float top = area.y + hint_room + (area.h - hint_room + total) * 0.5f;
@@ -524,25 +564,25 @@ static void menu_view_draw_high_scores(Renderer *renderer, const BoardLayout *la
 
     const char *title = "HIGH SCORES";
     const char *hint = "ESC BACK";
-    const int title_pixel =
-        board_layout_fit_text_pixel(inner, (int)strlen(title), menu_view_max(1, cell / 4));
-    const float title_h = (float)(FONT_GLYPH_H * title_pixel);
-    int pixel = board_layout_fit_text_pixel(inner, (int)strlen(lines[0]),
-                                            menu_view_max(1, cell / 6));
-    const int hint_pixel = menu_view_hint_pixel(hint, inner, cell);
-    const float hint_room = (float)(FONT_GLYPH_H * hint_pixel + cell);
+    const float title_pixel =
+        menu_view_fit(renderer, (float)inner, (int)strlen(title), (float)cell / 4.0f);
+    const float title_h = (float)FONT_GLYPH_H * title_pixel;
+    float pixel =
+        menu_view_fit(renderer, (float)inner, (int)strlen(lines[0]), (float)cell / 6.0f);
+    const float hint_pixel = menu_view_hint_pixel(renderer, hint, (float)inner, cell);
+    const float hint_room = (float)FONT_GLYPH_H * hint_pixel + (float)cell;
     float pitch = 0.0f;
     for (;;) {
-        pitch = (float)(FONT_GLYPH_H * pixel) * 1.7f;
+        pitch = (float)FONT_GLYPH_H * pixel * 1.7f;
         const float room =
             area.h - (float)cell - hint_room - title_h - menu_view_title_gap(pixel, cell);
-        if ((float)(SAVE_MAX_SCORES + 1) * pitch <= room || pixel <= 1) {
+        if ((float)(SAVE_MAX_SCORES + 1) * pitch <= room || pixel <= 1.0f) {
             break;
         }
-        --pixel;
+        pixel = menu_view_shrink(renderer, pixel);
     }
 
-    const float row_h = (float)(FONT_GLYPH_H * pixel);
+    const float row_h = (float)FONT_GLYPH_H * pixel;
     const float title_gap = menu_view_title_gap(pixel, cell);
     const float total = title_h + title_gap + (float)(SAVE_MAX_SCORES + 1) * pitch;
     float top = area.y + hint_room + (area.h - hint_room + total) * 0.5f;

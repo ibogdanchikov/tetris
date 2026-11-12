@@ -1,8 +1,10 @@
 #include "render/text.h"
 
 #include <stddef.h>
+#include <string.h>
 
 #include "render/font.h"
+#include "render/stroke_font.h"
 
 /* How far a letter's glow reaches, in font pixels. */
 #define TEXT_GLOW_REACH_PIXELS 1.5f
@@ -66,19 +68,54 @@ static void text_draw_pass(Renderer *renderer, float x, float y, int pixel, Colo
     }
 }
 
-void text_draw(Renderer *renderer, float x, float y, int pixel, Color color, Color glow,
+/*
+ * One pass of the stroke font: a quad per glyph covering its whole atlas cell,
+ * so the cell's padding lands STROKE_FONT_PAD units around the glyph box.
+ */
+static void text_draw_stroke_pass(Renderer *renderer, float x, float y, float pixel,
+                                  Color color, bool glow, const char *text)
+{
+    const float advance = (float)(FONT_GLYPH_W + FONT_GLYPH_SPACING) * pixel;
+    const float pad = STROKE_FONT_PAD * pixel;
+    const float w = (float)FONT_GLYPH_W * pixel + 2.0f * pad;
+    const float h = (float)FONT_GLYPH_H * pixel + 2.0f * pad;
+    float cursor = x;
+
+    for (const char *c = text; *c != '\0'; ++c) {
+        const int glyph = stroke_font_glyph_index(*c);
+        if (glyph >= 0) {
+            renderer_push_styled(renderer, cursor - pad, y - pad, w, h, color, RECT_STYLE_GLYPH,
+                                 (float)glyph, glow ? 1.0f : 0.0f, 0.0f);
+        }
+        cursor += advance;
+    }
+}
+
+void text_draw(Renderer *renderer, float x, float y, float pixel, Color color, Color glow,
                const char *text)
 {
-    if (text == NULL || pixel < 1) {
+    if (text == NULL || !(pixel > 0.0f)) {
         return;
     }
 
+    if (renderer_has_font(renderer)) {
+        if (glow.a > 0.0f) {
+            renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
+            text_draw_stroke_pass(renderer, x, y, pixel, glow, true, text);
+            renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
+        }
+        text_draw_stroke_pass(renderer, x, y, pixel, color, false, text);
+        return;
+    }
+
+    /* The pixel font only has whole pixels. */
+    const int whole = pixel < 1.0f ? 1 : (int)pixel;
     if (glow.a > 0.0f) {
         renderer_set_blend(renderer, RENDER_BLEND_ADDITIVE);
-        text_draw_pass(renderer, x, y, pixel, glow, true, text);
+        text_draw_pass(renderer, x, y, whole, glow, true, text);
         renderer_set_blend(renderer, RENDER_BLEND_ALPHA);
     }
-    text_draw_pass(renderer, x, y, pixel, color, false, text);
+    text_draw_pass(renderer, x, y, whole, color, false, text);
 }
 
 /* Rounds to the nearest pixel so centered text keeps crisp edges. */
@@ -87,15 +124,20 @@ static float text_round(float value)
     return (float)(int)(value + (value >= 0.0f ? 0.5f : -0.5f));
 }
 
-void text_draw_centered(Renderer *renderer, float x, float y, float w, float h, int pixel,
+void text_draw_centered(Renderer *renderer, float x, float y, float w, float h, float pixel,
                         Color color, Color glow, const char *text)
 {
-    if (text == NULL || pixel < 1) {
+    if (text == NULL || !(pixel > 0.0f)) {
         return;
     }
 
-    const float text_w = (float)font_text_width(text, pixel);
-    const float text_h = (float)(FONT_GLYPH_H * pixel);
+    /* The same width font_text_width gives for whole pixels, at any size. */
+    const size_t glyphs = strlen(text);
+    const float text_w =
+        glyphs == 0 ? 0.0f
+                    : ((float)glyphs * (float)(FONT_GLYPH_W + FONT_GLYPH_SPACING) -
+                       (float)FONT_GLYPH_SPACING) * pixel;
+    const float text_h = (float)FONT_GLYPH_H * pixel;
     text_draw(renderer, text_round(x + (w - text_w) * 0.5f),
               text_round(y + (h - text_h) * 0.5f), pixel, color, glow, text);
 }

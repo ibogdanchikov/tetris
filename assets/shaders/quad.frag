@@ -7,6 +7,7 @@ const int STYLE_NEON = 2;
 const int STYLE_GLOW = 3;
 const int STYLE_GHOST = 4;
 const int STYLE_BEAM = 5;
+const int STYLE_GLYPH = 6;
 
 /* Half width of the antialiased style edge, in pixels. One pixel either side of
    the geometry is enough: the styles are pixel-sized features, not gradients. */
@@ -25,6 +26,11 @@ uniform vec2 u_viewport_size;
 /* Presentation time in seconds, wrapped to an hour by the app. It drives the
    sheen, the sparkles, the ghost and the beam. */
 uniform float u_time;
+
+/* The stroke font's distance atlas and its grid of glyph cells (columns, rows);
+   see render/stroke_font.h. 0.5 in the atlas is the edge of a letter's tube. */
+uniform sampler2D u_font;
+uniform vec2 u_font_grid;
 
 /*
  * Neon glass blocks. Every light comes from the block itself: a glowing tube
@@ -383,6 +389,27 @@ vec4 style_beam()
     return vec4(v_color.rgb, v_color.a * profile * fade * (0.55 + 0.45 * streak));
 }
 
+/*
+ * One glyph of the stroke font. The quad is the glyph's whole atlas cell,
+ * padding included; p0 is the glyph's index in the atlas. With p1 = 0 it draws
+ * the letter, antialiased at the tube edge at any size; with p1 = 1 it draws
+ * the neon glow around it instead, falling off over the padding (meant for
+ * additive blending).
+ */
+vec4 style_glyph()
+{
+    float index = floor(v_params.x + 0.5);
+    vec2 cell = vec2(mod(index, u_font_grid.x), floor(index / u_font_grid.x));
+    float value = texture(u_font, (cell + v_uv) / u_font_grid).r;
+
+    if (v_params.y > 0.5) {
+        float glow = smoothstep(0.0, 0.5, value);
+        return vec4(v_color.rgb, v_color.a * glow * glow);
+    }
+    float width = max(fwidth(value) * 0.75, 0.01);
+    return vec4(v_color.rgb, v_color.a * smoothstep(0.5 - width, 0.5 + width, value));
+}
+
 void main()
 {
     if (v_style == STYLE_BLOCK) {
@@ -395,6 +422,8 @@ void main()
         frag_color = style_ghost();
     } else if (v_style == STYLE_BEAM) {
         frag_color = style_beam();
+    } else if (v_style == STYLE_GLYPH) {
+        frag_color = style_glyph();
     } else {
         frag_color = v_color;
     }

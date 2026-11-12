@@ -6,6 +6,7 @@
 
 #include "render/builtin_shaders.h"
 #include "render/shader.h"
+#include "render/stroke_font.h"
 
 /* Per-instance payload: rect (x, y, w, h), colour (r, g, b, a), style params. */
 #define RENDERER_INSTANCE_FLOATS 12
@@ -101,6 +102,9 @@ static bool renderer_load_quad_program(Renderer *renderer)
     renderer->viewport_uniform = viewport_uniform;
     /* Optional: a shader without u_time gets -1, and setting -1 is a no-op. */
     renderer->time_uniform = glGetUniformLocation(program, "u_time");
+    /* So are the font uniforms; without them text uses the pixel font. */
+    renderer->font_uniform = glGetUniformLocation(program, "u_font");
+    renderer->font_grid_uniform = glGetUniformLocation(program, "u_font_grid");
     return true;
 }
 
@@ -336,6 +340,50 @@ static void renderer_run_bloom(Renderer *renderer)
     glEnable(GL_BLEND);
 }
 
+/*
+ * Builds the stroke font's distance atlas on the CPU and uploads it as a
+ * one-channel texture with mipmaps, so small text stays smooth. A failure only
+ * logs: text falls back to the pixel font.
+ */
+static void renderer_build_font(Renderer *renderer)
+{
+    int width = 0;
+    int height = 0;
+    stroke_font_atlas_size(&width, &height);
+    unsigned char *pixels = malloc((size_t)width * (size_t)height);
+    if (pixels == NULL || !stroke_font_build_atlas(pixels, width, height)) {
+        fprintf(stderr, "renderer: could not build the font atlas; using the pixel font\n");
+        free(pixels);
+        return;
+    }
+
+    glActiveTexture(GL_TEXTURE0 + RENDERER_FONT_UNIT);
+    glGenTextures(1, &renderer->font_texture);
+    glBindTexture(GL_TEXTURE_2D, renderer->font_texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, pixels);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE0);
+    free(pixels);
+
+    int cell_width = 0;
+    int cell_height = 0;
+    stroke_font_cell_size(&cell_width, &cell_height);
+    renderer->font_columns = width / cell_width;
+    renderer->font_rows = height / cell_height;
+}
+
+bool renderer_has_font(const Renderer *renderer)
+{
+    return renderer->font_texture != 0 && renderer->font_uniform >= 0 &&
+           renderer->font_grid_uniform >= 0;
+}
+
 void renderer_set_bloom(Renderer *renderer, bool enabled)
 {
     renderer->bloom_wanted = enabled;
@@ -370,6 +418,9 @@ bool renderer_init(Renderer *renderer, const char *shader_dir)
 
     /* So is bloom: without its shaders the frame goes straight to the screen. */
     renderer_load_bloom_programs(renderer);
+
+    /* And the font atlas: without it text uses the pixel font. */
+    renderer_build_font(renderer);
 
     /* Unit quad as a triangle strip: (0,0) (1,0) (0,1) (1,1). */
     static const float quad_vertices[] = {
@@ -460,6 +511,17 @@ void renderer_begin(Renderer *renderer, int fb_w, int fb_h, float time_seconds)
     glUseProgram(renderer->program);
     glUniform2f(renderer->viewport_uniform, (float)fb_w, (float)fb_h);
     glUniform1f(renderer->time_uniform, time_seconds);
+
+    /* The atlas is bound every frame, so nothing else can leave the unit
+       pointing at another texture. */
+    if (renderer->font_texture != 0) {
+        glActiveTexture(GL_TEXTURE0 + RENDERER_FONT_UNIT);
+        glBindTexture(GL_TEXTURE_2D, renderer->font_texture);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(renderer->font_uniform, RENDERER_FONT_UNIT);
+        glUniform2f(renderer->font_grid_uniform, (float)renderer->font_columns,
+                    (float)renderer->font_rows);
+    }
 }
 
 void renderer_draw_background(Renderer *renderer)
@@ -566,6 +628,10 @@ void renderer_end(Renderer *renderer)
 void renderer_shutdown(Renderer *renderer)
 {
     renderer_delete_bloom_buffers(renderer);
+    if (renderer->font_texture != 0) {
+        glDeleteTextures(1, &renderer->font_texture);
+        renderer->font_texture = 0;
+    }
     RendererPass *passes[] = { &renderer->bloom_extract, &renderer->bloom_blur,
                                &renderer->bloom_composite };
     for (size_t i = 0; i < sizeof passes / sizeof passes[0]; ++i) {

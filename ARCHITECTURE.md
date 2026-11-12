@@ -12,7 +12,7 @@ The game is split into a deterministic simulation and a presentation layer that 
      |               |                 |                |               |
      v               v                 v                v               v
  tetris_fx   tetris_view_layout   tetris_input     tetris_audio     tetris_app
- src/fx      board_layout, font   input_buffer     sound_map,       save, menu
+ src/fx      board_layout, fonts  input_buffer     sound_map,       save, menu
                                                    mix, synth
      +---------------+-----------------+----------------+---------------+
                                        v
@@ -40,9 +40,11 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **The save file is versioned text.** `src/app/save.c` turns `SaveData` (settings, bindings, top ten scores) into a `TETRIS SAVE` line, `version=1` and one `key=value` per line, and parses it back defensively: no magic line or an unknown version gives the defaults, unknown keys and malformed lines are skipped, numbers are clamped. It works on strings only. `src/app/save_file.c` finds the file with `SDL_GetPrefPath("", "tetris")`, reads it with `SDL_LoadFile`, and writes `<path>.tmp` before renaming it over the old file, so a crash mid-save keeps the previous one. Settings are written when the player leaves the settings screens (or quits), a score as soon as the run ends.
 
-**There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` draws a neon glass block with rounded corners, a glowing tube along the edge, dark glass lit from inside, a thin inner line, a sheen that sweeps across the screen every few seconds and, with a seed in `p1`, random sparkles. `RECT_STYLE_NEON` draws a glowing tube along a rounded rectangle, or a glowing filled one, for the frames, the text glow and the lock flash. `RECT_STYLE_GLOW` draws a radial falloff for particles, the glow around blocks and the active piece's halo, `RECT_STYLE_GHOST` draws one cell of the ghost's hologram silhouette from a mask of its neighbors, and `RECT_STYLE_BEAM` draws the light that falls from the piece to the ghost. The animated parts of the block, ghost and beam styles run on the `u_time` uniform, so `board_view` passes no time of its own. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
+**There is one instanced quad batcher.** `Renderer` queues up to `RENDERER_MAX_RECTS` (4096) quads and draws them with one `glDrawArraysInstanced`. Each instance carries a rectangle, a color and `(style, p0, p1, p2)`. `RECT_STYLE_FLAT` is a plain rectangle, `RECT_STYLE_BLOCK` draws a neon glass block with rounded corners, a glowing tube along the edge, dark glass lit from inside, a thin inner line, a sheen that sweeps across the screen every few seconds and, with a seed in `p1`, random sparkles. `RECT_STYLE_NEON` draws a glowing tube along a rounded rectangle, or a glowing filled one, for the frames, the text glow and the lock flash. `RECT_STYLE_GLOW` draws a radial falloff for particles, the glow around blocks and the active piece's halo, `RECT_STYLE_GHOST` draws one cell of the ghost's hologram silhouette from a mask of its neighbors, `RECT_STYLE_BEAM` draws the light that falls from the piece to the ghost, and `RECT_STYLE_GLYPH` draws one letter, or its glow, from the font atlas. The animated parts of the block, ghost and beam styles run on the `u_time` uniform, so `board_view` passes no time of its own. `renderer_set_blend` switches between alpha and additive blending; it flushes the batch first because blending is GL state.
 
 **Bloom is a renderer pass, not a view.** With bloom on, `renderer_begin` binds an offscreen framebuffer the size of the drawable (rebuilt when the size changes) and every view draws into it unchanged. `renderer_end` then takes the bright parts to a quarter-size half-float texture, blurs them `RENDERER_BLOOM_BLUR_PASSES` times along x and y with a ping-pong pair, and composites scene plus blur into the default framebuffer, so the back buffer always holds the finished frame. Scissor and blending are off for the passes. A missing bloom shader or an incomplete framebuffer turns bloom off with one log line instead of failing. The tuning (downscale, passes, threshold, strength) is in `src/render/renderer.h`.
+
+**Text is a stroke font drawn from a distance atlas.** `src/render/stroke_font.c` keeps each glyph as a few polylines on the pixel font's 5x7 grid and turns them into a one-channel signed-distance atlas at startup (`stroke_font_build_atlas`, GL-free). `renderer_init` uploads it with mipmaps and keeps it bound to texture unit `RENDERER_FONT_UNIT` (2, clear of the bloom passes); `text_draw` then pushes one `RECT_STYLE_GLYPH` quad per glyph, covering its whole atlas cell, and an additive glow pass from the same cells. The stroke font has the pixel font's metrics, so every layout is the same with either one, and sizes are floats: the menus fit text to the room with `menu_view_fit` instead of whole pixels. When the atlas cannot be built or the quad shader has no `u_font`, `renderer_has_font` is false and text falls back to the pixel font, with sizes rounded down to whole pixels. This replaces the checked-in atlas or vendored TrueType rasterizer the roadmap suggested: strokes in the source need no download, no license review and no binary blob, and they suit the neon look.
 
 **GLAD is vendored and loaded through SDL.** `gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)` runs in `platform_init` after the context is current. The project never links `libGL`; `libgl-dev` is only needed for the driver headers.
 
@@ -71,7 +73,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 | `glad` | `external/glad/src/gl.c`, `external/glad/include/` | Generated OpenGL 3.3 core loader. | Its own generated headers | Anything from `src/` |
 | `tetris_core` | `src/core/board.c`, `src/core/piece.c`, `src/core/bag.c`, `src/core/rng.c`, `src/core/game.c` | Playfield, SRS shapes, 7-bag, splitmix64 and the tick-based rules. | C standard headers (`stdint.h`, `stdbool.h`, `string.h`) | SDL, GL, allocation, float, clock |
 | `tetris_fx` | `src/fx/fx.c` | Particles, effect timers, screen shake and clear-animation math. | `tetris_core` | SDL, GL, allocation, clock |
-| `tetris_view_layout` | `src/render/board_layout.c`, `src/render/font.c` | Layout math and the built-in 5x7 font. | `tetris_core` | SDL, GL, allocation |
+| `tetris_view_layout` | `src/render/board_layout.c`, `src/render/font.c`, `src/render/stroke_font.c` | Layout math, the built-in 5x7 pixel font, and the stroke font with its distance atlas. | `tetris_core` | SDL, GL, allocation |
 | `tetris_input` | `src/app/input_buffer.c` | Press/hold buffer between frames and ticks. | `tetris_core` (`src/core/input.h`) | SDL |
 | `tetris_audio` | `src/app/sound_map.c`, `src/audio/mix.c`, `src/audio/synth.c` | Event-to-sound mapping, voice mixing and synthesis. | `tetris_core` | SDL, allocation, libm |
 | `tetris_app` | `src/app/save.c`, `src/app/menu.c` | Settings, key bindings, the score table, the save text format and the screen state machine. | `tetris_core`, C standard headers (`stdio.h` for `snprintf`) | SDL, GL, file I/O, allocation |
@@ -197,10 +199,16 @@ void renderer_set_blend(Renderer *renderer, RenderBlend blend);
 bool renderer_reload_shaders(Renderer *renderer);
 void renderer_end(Renderer *renderer);
 void renderer_set_bloom(Renderer *renderer, bool enabled);
+bool renderer_has_font(const Renderer *renderer);
 void renderer_shutdown(Renderer *renderer);
+
+int stroke_font_glyph_index(char c);
+bool stroke_font_build_atlas(unsigned char *pixels, int width, int height);
+void text_draw(Renderer *renderer, float x, float y, float pixel, Color color, Color glow,
+               const char *text);
 ```
 
-`renderer_begin` sets the viewport, clears to the background color, resets the blend mode to alpha and binds the quad program. Its `time_seconds` is presentation-only time; the background and the block sheen read it, the game never does. Rectangles are in pixels with a bottom-left origin. `renderer_end` flushes what is still queued and, with bloom on, runs the bloom passes. `renderer_set_bloom` takes effect from the next frame; turning bloom off frees its buffers. `renderer_shutdown` is safe to call twice.
+`renderer_begin` sets the viewport, clears to the background color, resets the blend mode to alpha and binds the quad program. Its `time_seconds` is presentation-only time; the background and the block sheen read it, the game never does. Rectangles are in pixels with a bottom-left origin. `renderer_end` flushes what is still queued and, with bloom on, runs the bloom passes. `renderer_set_bloom` takes effect from the next frame; turning bloom off frees its buffers. `renderer_has_font` says whether text can come from the atlas. `text_draw` takes the size of one pixel-font pixel as a float; the stroke font draws it exactly, the pixel font rounds it down. `renderer_shutdown` is safe to call twice.
 
 ```c
 void board_view_draw(Renderer *renderer, const BoardLayout *layout, const GameState *game,

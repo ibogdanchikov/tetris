@@ -99,6 +99,13 @@ startup like the effects, with no audio files. It plays on a voice of its own,
 outside the effect pool, so effects never cut it off. **Settings > MUSIC** sets
 its level on top of **VOLUME**, and **M** mutes it with everything else.
 
+**Milestone 7, part 5** replaces the blocky text with a vector font: every
+letter is a few neon tubes on the same 5x7 grid as before, drawn from a
+distance-field texture atlas that is built at startup. Text stays smooth at any
+size, the glow comes from the same texture, and the menus now fit their text to
+the room they have instead of stepping a whole pixel at a time. The old pixel
+font stays as the fallback.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -289,12 +296,22 @@ each side:
 Preview pieces use three quarters of the board cell size, so a flat I keeps about
 half a cell of padding inside its four-cell box instead of touching the frame.
 
-All text comes from a built-in 5x7 bitmap font drawn with the same rectangle
-renderer as the board: no textures and no font files. The font covers space,
-A-Z, 0-9 and `: . - ! ? < >`; lowercase letters use the uppercase glyph, and any
-other character is skipped. A ten-digit score shrinks its glyph size a pixel at a
-time until it fits the panel; from a 352x352 framebuffer up (cell size 16) even
-`4294967295` fits.
+Text is drawn with a stroke font, `src/render/stroke_font.c`: each glyph is a
+few polylines on a 5x7 grid, drawn as round-capped tubes like a neon sign. At
+startup the strokes are turned into a signed-distance atlas, a 512x480
+one-channel texture in which each texel holds how far it is from the nearest
+stroke. One quad per glyph samples it with `RECT_STYLE_GLYPH`, which gives a
+crisp antialiased edge at any size and, in an additive second pass, the glow
+around the letters. There are no font files. The font covers space, A-Z, 0-9
+and `: . - ! ? < >`; lowercase letters use the uppercase glyph, and any other
+character is skipped.
+
+The stroke font has the same metrics as the old 5x7 pixel font, which is still
+there (`src/render/font.c`) as the fallback when the atlas cannot be made or a
+custom `quad.frag` has no glyph style. Sizes are in units of one pixel-font
+pixel and may be fractional; the pixel font rounds them down. A ten-digit score
+shrinks until it fits the panel; from a 352x352 framebuffer up (cell size 16)
+even `4294967295` fits.
 
 Pause dims the board and puts the pause menu over it. Losing window focus pauses
 a running game so the piece does not keep falling, and resuming clears the input
@@ -518,7 +535,8 @@ src/render/                 GL rendering
   renderer.h/.c             instanced quad batcher with styles, blend modes, background and F5 reload
   board_layout.h/.c         pure layout maths for the board and both HUD panels, GL-free and tested
   font.h/.c                 built-in 5x7 bitmap font data and measuring, GL-free and tested
-  text.h/.c                 draws strings as merged pixel-run rectangles
+  stroke_font.h/.c          the vector stroke font and its distance atlas, GL-free
+  text.h/.c                 draws strings from the atlas, or as pixel-font rectangles
   board_view.h/.c           playfield, ghost, drop beam, active piece and its halo, and the clear animation
   fx_view.h/.c              lock flash, hard-drop trails and additive glow particles
   hud.h/.c                  hold, next, stats and the clear label
@@ -608,8 +626,9 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
 - The layout centres the left panel, playfield and right panel as one group, so
   both panels keep a one-cell gap at every window size. Panels are four cells
   wide and top-aligned with the playfield.
-- The HUD is drawn from rectangles too: one per run of lit font pixels, plus a
-  neon glow per run behind the letters. There are no textures and no font files.
+- Text is the one textured thing: one quad per glyph from the stroke font's
+  distance atlas (`RECT_STYLE_GLYPH`), plus a glow pass from the same atlas. The
+  atlas is built from in-repo stroke data at startup, so there are no font files.
   Values longer than the stats panel shrink their glyph size instead of running
   over the board.
 - Every quad instance is three `vec4`s: rect, colour and
@@ -644,8 +663,8 @@ Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),
 
 - An audio-device picker, and more than one music track.
 - Saving a run or recording a replay.
-- Real font rendering (a texture atlas) once the HUD needs more characters or
-  smoother type; the rectangle font is deliberate for now.
+- Lowercase letters and more punctuation in the stroke font, if the game ever
+  needs them.
 
 ## Notes
 

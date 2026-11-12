@@ -16,7 +16,7 @@ typedef struct Color {
 
 /*
  * Per-instance style, matched by value in quad.frag. Keep the numbers and the
- * enum in step: the shader compares the style id against 0..5.
+ * enum in step: the shader compares the style id against 0..6.
  *
  * RECT_STYLE_FLAT     a plain rectangle, exactly the old behaviour.
  * RECT_STYLE_BLOCK    a neon glass block: rounded corners, a glowing tube
@@ -47,6 +47,11 @@ typedef struct Color {
  *                     beam runs right next to it on the left or the right, so
  *                     only the free sides fade out. Meant for additive
  *                     blending.
+ * RECT_STYLE_GLYPH    one glyph of the stroke font from the font atlas. The
+ *                     rect is the glyph's whole atlas cell, padding included
+ *                     (see render/stroke_font.h). p0 is the glyph index; p1 is
+ *                     0 for the letter itself and 1 for its glow, which is
+ *                     meant for additive blending.
  */
 typedef enum RectStyle {
     RECT_STYLE_FLAT = 0,
@@ -55,6 +60,7 @@ typedef enum RectStyle {
     RECT_STYLE_GLOW = 3,
     RECT_STYLE_GHOST = 4,
     RECT_STYLE_BEAM = 5,
+    RECT_STYLE_GLYPH = 6,
 } RectStyle;
 
 /*
@@ -112,6 +118,8 @@ typedef struct Renderer {
     GLuint instance_vbo;
     GLint viewport_uniform;
     GLint time_uniform; /* -1 when the quad shader does not use u_time */
+    GLint font_uniform;      /* -1 when the quad shader has no glyph style */
+    GLint font_grid_uniform;
     GLint background_resolution_uniform;
     GLint background_time_uniform;
     int viewport_width;
@@ -131,6 +139,16 @@ typedef struct Renderer {
      * when the buffers could not be built, so the game draws without bloom
      * instead of retrying every frame.
      */
+    /*
+     * The stroke font atlas (render/stroke_font.h), built and uploaded in
+     * renderer_init and bound to texture unit RENDERER_FONT_UNIT for every
+     * frame. 0 when it could not be made; text then falls back to the pixel
+     * font.
+     */
+    GLuint font_texture;
+    int font_columns;
+    int font_rows;
+
     bool bloom_wanted;
     bool bloom_active;
     bool bloom_broken;
@@ -144,6 +162,9 @@ typedef struct Renderer {
     int bloom_source_width; /* drawable size the buffers were built for */
     int bloom_source_height;
 } Renderer;
+
+/* Texture unit the font atlas stays bound to; the bloom passes use 0 and 1. */
+#define RENDERER_FONT_UNIT 2
 
 /*
  * Creates the shader programs (shader_dir must contain quad.vert, quad.frag,
@@ -216,6 +237,9 @@ bool renderer_reload_shaders(Renderer *renderer);
  * the finished frame either way (the screenshot reads it from there).
  */
 void renderer_end(Renderer *renderer);
+
+/* True when glyphs can be drawn from the font atlas with RECT_STYLE_GLYPH. */
+bool renderer_has_font(const Renderer *renderer);
 
 /*
  * Turns bloom on or off from the next frame. Bloom needs the three bloom

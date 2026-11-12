@@ -93,11 +93,12 @@ target_include_directories(tetris_fx PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(tetris_fx PUBLIC tetris_core)
 tetris_enable_warnings(tetris_fx)
 
-# Layout maths and the built-in font only: no GL, no SDL, so the tests can link
-# them on their own.
+# Layout maths and the built-in fonts (the pixel font and the stroke font with
+# its distance atlas) only: no GL, no SDL, so the tests can link them on their own.
 add_library(tetris_view_layout STATIC
     src/render/board_layout.c
     src/render/font.c
+    src/render/stroke_font.c
 )
 target_include_directories(tetris_view_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(tetris_view_layout PUBLIC tetris_core)
