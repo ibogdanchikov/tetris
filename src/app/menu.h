@@ -138,6 +138,13 @@ bool menu_item_has_value(MenuItem item);
  */
 void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t size);
 
+/*
+ * Length of the longest value a value row can show, over its whole range and
+ * every mode, so a menu can size the row once and keep that size as the value
+ * changes. 0 for any other row.
+ */
+int menu_item_value_max_length(MenuItem item);
+
 /* The action a controls row binds, or -1 for the other rows. */
 int menu_item_bind_action(MenuItem item);
 

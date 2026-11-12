@@ -213,14 +213,17 @@ typedef struct MenuViewPage {
     bool table; /* value rows put the label left and the value right */
 } MenuViewPage;
 
-/* Text of a row as drawn: plain rows are the label, value rows get both. */
-static int menu_view_row_glyphs(const MenuViewState *state, MenuItem item)
+/*
+ * Text of a row as drawn: plain rows are the label, value rows get both. A value
+ * row counts its longest value, not the current one, so the text size of the
+ * whole page stays the same as the value changes.
+ */
+static int menu_view_row_glyphs(MenuItem item)
 {
     int glyphs = (int)strlen(menu_item_label(item));
     if (menu_item_has_value(item)) {
-        char value[32];
-        menu_item_value(item, state->settings, value, sizeof value);
-        glyphs += 2 + (int)strlen(value) + 4; /* a gap and the "< " " >" arrows */
+        /* a gap and the "< " " >" arrows */
+        glyphs += 2 + menu_item_value_max_length(item) + 4;
     }
     return glyphs;
 }
@@ -279,7 +282,7 @@ static void menu_view_draw_page(Renderer *renderer, const BoardLayout *layout,
     /* Rows: the widest row decides the pixel size. */
     int widest = 1;
     for (int i = 0; i < page->item_count; ++i) {
-        widest = menu_view_max(widest, menu_view_row_glyphs(state, page->items[i]));
+        widest = menu_view_max(widest, menu_view_row_glyphs(page->items[i]));
     }
     for (int i = 0; i < page->info_count; ++i) {
         widest = menu_view_max(widest, (int)strlen(page->info[i]));

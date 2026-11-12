@@ -1,6 +1,7 @@
 #include "app/menu.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static const MenuItem MENU_MAIN_ITEMS[] = {
     MENU_ITEM_START,       MENU_ITEM_MODE,     MENU_ITEM_START_LEVEL,
@@ -273,6 +274,32 @@ void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t 
     default:
         break;
     }
+}
+
+int menu_item_value_max_length(MenuItem item)
+{
+    Settings scratch;
+    memset(&scratch, 0, sizeof scratch);
+    int min = 0;
+    int max = 0;
+    int *value = menu_item_setting(item, &scratch, &min, &max);
+    if (value == NULL) {
+        return 0;
+    }
+
+    /* Every mode as well, since the start level shows "-" outside Marathon. */
+    int longest = 0;
+    for (int mode = 0; mode < PLAY_MODE_COUNT; ++mode) {
+        for (int candidate = min; candidate <= max; ++candidate) {
+            scratch.mode = mode;
+            *value = candidate;
+            char text[32];
+            menu_item_value(item, &scratch, text, sizeof text);
+            const int length = (int)strlen(text);
+            longest = length > longest ? length : longest;
+        }
+    }
+    return longest;
 }
 
 /* LEFT/RIGHT on a value row. Stops at the ends of the range. */
