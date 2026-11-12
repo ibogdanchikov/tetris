@@ -153,12 +153,45 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ## Planned milestones
 
-None. Milestone 7 was the last planned one; the next step comes from the list below.
+### Milestone 8: game modes
+
+**Goal:** add two timed modes next to the endless game: Sprint (clear 40 lines as fast as possible) and Ultra (score as much as possible in two minutes), each with its own top-ten table.
+
+**Scope**
+
+- Three modes: Marathon (the current endless game, unchanged), Sprint and Ultra.
+- A goal in the core: a line goal and a tick limit in `GameConfig`, and two new end reasons for reaching them.
+- A **MODE** row on the main menu, saved with the settings.
+- A HUD for each mode: Sprint shows the elapsed time and the lines left, Ultra the time left.
+- A results screen for a finished Sprint or Ultra, and a finish sound.
+- A top-ten table per mode, kept in the same save file.
+
+**Design notes**
+
+- The core knows goals, not mode names. `GameConfig` gets `line_goal` (0 = none), `tick_limit` (0 = none) and `level_up` (whether the level rises every ten lines). Marathon is `{0, 0, true}`, Sprint `{40, 0, false}` and Ultra `{0, 7200, false}`. The app maps a mode to a config; the rules stay free of menus and names.
+- `GameOverReason` gets `GAME_OVER_LINE_GOAL` and `GAME_OVER_TIME_UP`. `game_over` keeps meaning "the run has ended", so every check of it in the app, the views and the sound map keeps working; the reason says whether the run was finished or lost. `GAME_EVENT_GAME_OVER` fires for all four.
+- Sprint ends on the lock tick that brings `lines_cleared` to `line_goal` or past it (a four-line clear from 38 finishes too). The full rows are removed at once, the way a lock out removes them, and there is no clear delay. The time is `game.tick` at that moment, so it counts every step of the run and none of the pause, and a replay gives the same time to the tick.
+- Ultra ends when `game.tick` reaches `tick_limit`, checked at the start of `game_step`, whatever the phase. A piece in the air scores nothing; a line clear already scored at its lock keeps its points, even if the clear delay is still running.
+- A top-out in Sprint is a lost run: it shows the game-over screen and records nothing. A top-out in Ultra ends the run early, but the score counts: Ultra is a score attack, and a top-out is its own penalty.
+- Sprint and Ultra start at level 1 and never level up, so runs are comparable; the start-level picker is for Marathon only. In those modes the main menu's **LEVEL** row reads `-` and ignores LEFT and RIGHT.
+- Time is shown as `M:SS.CC` from ticks (`ticks * 100 / 60` hundredths). The font has `:` and `.`, so no new glyphs are needed. In Sprint and Ultra the HUD replaces **LEVEL**, which never changes there, with **TIME**.
+- Results: a finished Sprint shows `CLEAR!` with the time and its place; Ultra shows `TIME UP` with the score and its place; Marathon and a lost Sprint keep `GAME OVER`. A finished run plays a new `SOUND_FINISH` fanfare instead of the game-over phrase, picked by `sound_map` from the end reason.
+- Scores: `HighScore` gets `ticks`. Marathon and Ultra rank by score (highest first), Sprint by ticks (lowest first); ties keep the earlier run on top, as now. The **HIGH SCORES** screen shows one mode at a time, LEFT and RIGHT switch, and it opens on the mode just played.
+- The save file needs no version bump. `score=` keeps meaning a Marathon run, and the new modes get new keys, `sprint=ticks lines seed` and `ultra=score lines seed`, so a 0.5.0 save loads in the new build with its scores as Marathon. A 0.5.0 build skips keys it does not know, so going back to it keeps working but drops the Sprint and Ultra tables on its next save, which is acceptable. `mode=marathon|sprint|ultra` is a new settings key on the same terms.
+- Not in this milestone: a countdown before the start, more modes (Zen, 20G, custom goals), splits or ghost comparisons, and replays. A countdown would move the start of the timer, and that is a separate decision.
+
+**Done when**
+
+- The main menu picks Marathon, Sprint or Ultra, and the choice survives a restart.
+- Sprint ends on the lock that reaches 40 lines with the exact time; Ultra ends at 2:00.00 with its score; both show their result and place, and the finish sound plays.
+- A Sprint top-out records nothing; an Ultra top-out records its score.
+- Each mode has its own top ten, saved and loaded; a save file from 0.5.0 loads with its scores as Marathon.
+- The HUD shows the mode's time and goal, and fits at 352x352.
+- Tests cover the line goal (including a clear that passes it), the tick limit at its exact tick, the fixed level, the new end reasons, Sprint ranking by time, the new save keys and an old save file, and a replay of a Sprint run giving the same time.
 
 ## Later / ideas
 
 - **Replays.** The core is already deterministic: a seed plus a per-tick input sequence replays a run. Record `held` and `pressed` per tick, add a small replay file format and a playback mode. The main work is a stable encoding and a way to stop or seek, not a change to the rules.
-- **Game modes.** Sprint (40 lines) and Ultra (a time limit). Add a mode config to the core with a goal type and a time limit, and show the goal in the HUD.
 - **Gamepad support.** Map SDL gamepad events to `GameAction` in `src/app/input_sdl.c`. The core already takes a bitmask, so no rules change is needed.
 - **CI.** Build and run the tests on Linux, Windows and macOS. A Linux sanitizer job and a shader-compile smoke test would catch most regressions.
 - **Packaging.** Linux ships as a single binary with the shaders built in. Windows and macOS still need their own builds.
