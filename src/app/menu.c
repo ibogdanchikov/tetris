@@ -3,9 +3,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/* A web page cannot close itself, so the browser build has no QUIT. */
 static const MenuItem MENU_MAIN_ITEMS[] = {
     MENU_ITEM_START,       MENU_ITEM_MODE,     MENU_ITEM_START_LEVEL,
-    MENU_ITEM_HIGH_SCORES, MENU_ITEM_SETTINGS, MENU_ITEM_QUIT,
+    MENU_ITEM_HIGH_SCORES, MENU_ITEM_SETTINGS,
+#ifndef __EMSCRIPTEN__
+    MENU_ITEM_QUIT,
+#endif
 };
 
 static const MenuItem MENU_PAUSE_ITEMS[] = {

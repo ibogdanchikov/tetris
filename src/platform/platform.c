@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-#include <glad/gl.h>
+#include "render/gl.h"
 
 static bool platform_fail(const char *what)
 {
@@ -10,6 +10,21 @@ static bool platform_fail(const char *what)
     return false;
 }
 
+#ifdef __EMSCRIPTEN__
+/* The browser offers WebGL 2, which SDL asks for as OpenGL ES 3.0. */
+static bool platform_set_gl_attributes(void)
+{
+    if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES) ||
+        !SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3) ||
+        !SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0) ||
+        !SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1) ||
+        !SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0) ||
+        !SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0)) {
+        return platform_fail("SDL_GL_SetAttribute");
+    }
+    return true;
+}
+#else
 static bool platform_set_gl_attributes(void)
 {
     if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE) ||
@@ -23,6 +38,7 @@ static bool platform_set_gl_attributes(void)
     }
     return true;
 }
+#endif
 
 static void platform_log_gl_info(void)
 {
@@ -48,8 +64,11 @@ bool platform_init(Platform *platform, const char *title, int width, int height)
         return false;
     }
 
-    const SDL_WindowFlags flags =
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#ifdef __EMSCRIPTEN__
+    /* In the browser the canvas fills the page and follows its size. */
+    flags |= SDL_WINDOW_FILL_DOCUMENT;
+#endif
     platform->window = SDL_CreateWindow(title, width, height, flags);
     if (platform->window == NULL) {
         platform_fail("SDL_CreateWindow");
@@ -69,17 +88,22 @@ bool platform_init(Platform *platform, const char *title, int width, int height)
         return false;
     }
 
+#ifndef __EMSCRIPTEN__
     if (gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress) == 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "gladLoadGL failed");
         platform_shutdown(platform);
         return false;
     }
+#endif
     platform_log_gl_info();
 
+#ifndef __EMSCRIPTEN__
+    /* In the browser, requestAnimationFrame paces the frames instead. */
     if (!SDL_GL_SetSwapInterval(1)) {
         /* A driver without vsync support is fine: we just run uncapped. */
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "vsync unavailable: %s", SDL_GetError());
     }
+#endif
 
     return true;
 }

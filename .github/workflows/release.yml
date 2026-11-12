@@ -1,6 +1,8 @@
-# Builds the downloadable game for Linux, Windows and macOS. A pushed v* tag
-# also publishes all three on a GitHub release, where the README's download
-# links point. Run by hand, it only builds them, as workflow artifacts.
+# Builds the downloadable game for Linux, Windows and macOS, and the browser
+# version. A pushed v* tag also publishes the three downloads on a GitHub
+# release, where the README's download links point, and the browser version on
+# the gh-pages branch, which GitHub Pages serves. Run by hand, it only builds
+# them, as workflow artifacts.
 name: Release
 
 on:
@@ -53,6 +55,46 @@ jobs:
           name: tetris-macos.dmg
           path: dist/tetris-macos.dmg
           if-no-files-found: error
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dist/web
+        run: packaging/web/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tetris-web
+          path: dist/web
+          if-no-files-found: error
+
+  # The branch holds one commit with the latest release's browser version,
+  # replaced on every release, so it never grows.
+  pages:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tetris-web
+          path: site
+
+      - name: Publish the browser version on gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: site
+        run: |
+          touch .nojekyll
+          git init --quiet --initial-branch gh-pages
+          git add --all
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet --message "Publish $GITHUB_REF_NAME"
+          git push --force --quiet \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')

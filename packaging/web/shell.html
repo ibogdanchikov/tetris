@@ -1,0 +1,72 @@
+<!doctype html>
+<!--
+  The page around the browser build. Emscripten puts the game's script where
+  the SCRIPT placeholder is. Once the game runs, SDL makes the canvas fill the
+  window and hides everything else on the page, so the status line only shows
+  while the game loads or when it cannot start.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tetris</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0a0f;
+  }
+  canvas {
+    display: block;
+    outline: none;
+  }
+  #status {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 16px;
+    color: #9ad8ff;
+    font: 18px/1.5 system-ui, sans-serif;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+<p id="status">Loading…</p>
+<script>
+  var statusLine = document.getElementById('status');
+  var problemShown = false;
+
+  /* The first problem is the cause; what follows it is only a consequence. */
+  function showProblem(text) {
+    if (!problemShown) {
+      problemShown = true;
+      statusLine.textContent = text;
+    }
+  }
+
+  if (!document.createElement('canvas').getContext('webgl2')) {
+    showProblem('This game needs WebGL 2, and this browser does not offer it.');
+  }
+
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    printErr: function (text) {
+      console.error(text);
+      if (text.startsWith('error:')) {
+        showProblem('The game could not start (' + text.slice(6).trim() + ').');
+      }
+    },
+    onAbort: function () {
+      showProblem('The game stopped because of an error.');
+    },
+  };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

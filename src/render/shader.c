@@ -85,6 +85,36 @@ static void shader_print_log(GLuint object, bool is_program, const char *path)
     }
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+ * The shaders are written in GLSL 3.30 core. WebGL 2 takes GLSL ES 3.00, which
+ * also needs default precisions, so the browser build compiles each shader
+ * with this header in place of its #version line. #line keeps the line numbers
+ * in the compiler's messages the same as in the file.
+ */
+static const char SHADER_ES_HEADER[] = "#version 300 es\n"
+                                       "precision highp float;\n"
+                                       "precision highp int;\n"
+                                       "precision highp sampler2D;\n"
+                                       "#line 2\n";
+
+static void shader_set_source(GLuint shader, const char *source)
+{
+    const char *body = source;
+    if (strncmp(body, "#version", 8) == 0) {
+        const char *newline = strchr(body, '\n');
+        body = newline != NULL ? newline + 1 : "";
+    }
+    const char *sources[2] = { SHADER_ES_HEADER, body };
+    glShaderSource(shader, 2, sources, NULL);
+}
+#else
+static void shader_set_source(GLuint shader, const char *source)
+{
+    glShaderSource(shader, 1, &source, NULL);
+}
+#endif
+
 static GLuint shader_compile(GLenum stage, const char *source, const char *path)
 {
     GLuint shader = glCreateShader(stage);
@@ -93,7 +123,7 @@ static GLuint shader_compile(GLenum stage, const char *source, const char *path)
         return 0;
     }
 
-    glShaderSource(shader, 1, &source, NULL);
+    shader_set_source(shader, source);
     glCompileShader(shader);
 
     GLint status = GL_FALSE;

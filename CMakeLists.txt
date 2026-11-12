@@ -59,10 +59,13 @@ endif()
 # --- dependencies -----------------------------------------------------------
 
 # GLAD is vendored, so OpenGL itself never has to be linked: SDL hands us the
-# entry points and gladLoadGL() resolves them.
-add_library(glad STATIC external/glad/src/gl.c)
-target_include_directories(glad PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include")
-tetris_disable_warnings(glad)
+# entry points and gladLoadGL() resolves them. The browser build needs no
+# loader: Emscripten links OpenGL ES 3.0 in, on top of WebGL 2.
+if(NOT EMSCRIPTEN)
+    add_library(glad STATIC external/glad/src/gl.c)
+    target_include_directories(glad PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include")
+    tetris_disable_warnings(glad)
+endif()
 
 find_package(SDL3 3.2 REQUIRED CONFIG)
 if(SDL3_DIR MATCHES "linuxbrew")
@@ -160,7 +163,6 @@ add_custom_command(
 add_executable(tetris
     src/main.c
     src/app/input_sdl.c
-    src/app/save_file.c
     src/app/screenshot.c
     src/audio/audio.c
     src/platform/platform.c
@@ -174,17 +176,38 @@ add_executable(tetris
     "${TETRIS_BUILTIN_SHADERS_C}"
 )
 target_link_libraries(tetris PRIVATE tetris_core tetris_fx tetris_input tetris_audio
-                                     tetris_view_layout tetris_app glad SDL3::SDL3)
+                                     tetris_view_layout tetris_app SDL3::SDL3)
 tetris_enable_warnings(tetris)
 
-# Assets are looked up relative to the executable, so they have to sit next to
-# it; this keeps `tetris` runnable from any working directory.
-add_custom_command(TARGET tetris POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-            "$<TARGET_FILE_DIR:tetris>/assets"
-    COMMENT "Copying assets next to the executable"
-)
+if(EMSCRIPTEN)
+    # The browser build is tetris.html, tetris.js and tetris.wasm. The page is
+    # packaging/web/shell.html; the shaders are the built-in copies, and the
+    # save goes to localStorage.
+    set(TETRIS_WEB_SHELL "${CMAKE_CURRENT_SOURCE_DIR}/packaging/web/shell.html")
+    target_sources(tetris PRIVATE src/app/save_file_web.c)
+    set_target_properties(tetris PROPERTIES
+        SUFFIX ".html"
+        LINK_DEPENDS "${TETRIS_WEB_SHELL}"
+    )
+    target_link_options(tetris PRIVATE
+        -sMIN_WEBGL_VERSION=2
+        -sMAX_WEBGL_VERSION=2
+        -sALLOW_MEMORY_GROWTH=1
+        "SHELL:--shell-file \"${TETRIS_WEB_SHELL}\""
+    )
+else()
+    target_sources(tetris PRIVATE src/app/save_file.c)
+    target_link_libraries(tetris PRIVATE glad)
+
+    # Assets are looked up relative to the executable, so they have to sit next
+    # to it; this keeps `tetris` runnable from any working directory.
+    add_custom_command(TARGET tetris POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+                "$<TARGET_FILE_DIR:tetris>/assets"
+        COMMENT "Copying assets next to the executable"
+    )
+endif()
 
 # --- tests ------------------------------------------------------------------
 

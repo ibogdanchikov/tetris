@@ -101,11 +101,19 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - `tests/test_modes.c` covers the line goal, the tick limit, the fixed level, a Sprint replay, the mode configs, Sprint ranking, recording, the save keys, an old save file and the time format.
 - One change from the plan: Ultra is checked at the end of the step that reaches the limit, not at the start of the next one, so the run is exactly 7200 ticks of play and the end shows on the same frame.
 
+### Milestone 9: "Port the game to the browser"
+
+- An Emscripten build of the same sources: WebGL 2 through OpenGL ES 3.0, SDL3 3.4.20 built for the web, the built-in shaders compiled as GLSL ES 3.00 by swapping their `#version` line at compile time, and a canvas that fills the page and follows its size and pixel density.
+- `main.c` runs one frame per `app_frame` call, so the desktop loops over it and the browser calls it once per animation frame.
+- Settings and scores go to `localStorage` through `src/app/save_file_web.c`, written as soon as they change. The main menu has no QUIT in the browser.
+- `packaging/web/build.sh` builds `dist/web` in Docker and runs the tests as WebAssembly under Node.js. The release workflow publishes it on the `gh-pages` branch for GitHub Pages.
+
 ## Current status
 
 ### What works
 
 - The full game loop: spawn, gravity, soft and hard drop, SRS rotation with kicks, hold, next queue, lock delay, line clears, scoring and levels.
+- The same game in the browser, on WebGL 2, with settings and scores in `localStorage`.
 - T-spins and mini T-spins, back-to-back bonuses, combos and perfect clears, with a fading label that names each notable clear.
 - After a clear, the rows above fall into place instead of jumping.
 - Bloom over the whole picture, switchable in the settings.
@@ -129,6 +137,8 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Each Milestone 6 rule was broken on purpose in a scratch copy (front corners ignored, no fifth-kick upgrade, a hard drop that always ends the spin), and the scoring suite failed every time. The clear label was drawn with all seven lines at 352x352, 800x600 and 1600x1000, forced onto the screen from a throwaway copy of `main.c`; it stayed inside the left panel at all three sizes.
 - Milestone 5 was checked with screenshots of every screen at 800x600: title, main menu, settings, controls (including the key prompt), high scores, pause and game over. The menus were driven by key events pushed with `SDL_PushEvent` from a throwaway copy of `main.c`, with `XDG_DATA_HOME` pointed at a scratch directory. Those runs changed the volume and DAS, rebound a key, played runs to game over, and then checked that `save.txt` held the changes and that the next start showed the best score. A save file of random bytes logged one warning and started with the defaults. `packaging/linux/build.sh` still builds and tests the release binary.
 
+- The browser build was played in headless Chrome 156 with SwiftShader, driven by key events over the DevTools protocol: the title, the main menu without QUIT, a Marathon run with moves, rotations and hard drops, pause, the settings screen, a volume change that was in `localStorage` right away and came back after a reload, a portrait window and a pixel ratio of 2 (a 1800x1280 canvas for a 900x640 page). The console showed a WebGL 2 context, the built-in shaders compiling as GLSL ES 3.00 and the audio device opening. The tests passed under Node.js, and the desktop build still matched the browser's title screen.
+
 ### Not verified on this machine
 
 - A T-spin, a perfect clear or a combo made in a real game by a person. The rules are unit tested and the label was drawn on screen, but nobody has played one here.
@@ -141,6 +151,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds and the music actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here. The music was checked by analysis instead: a throwaway program measured a seam step of 0.00005 against 0.064 for the largest step inside the loop, a peak of 0.51, no DC offset and even loudness across the eight bars, and an ffmpeg spectrogram showed the melody, arpeggio, bass and drums where they were written. The seam test was checked against a render that cut the notes at the end, which it fails. The sanitizer build ran 240 frames with the music mixing through SDL's dummy audio driver without a report. Its level against the effects (`AUDIO_MUSIC_GAIN` 0.5, MUSIC 7 by default) is a guess until someone listens.
 - Windows and macOS builds.
+- The browser build on a real GPU, with a person at the keyboard, and in Firefox and Safari. Nobody has listened to it either; Chrome warns that SDL's Web Audio output uses the deprecated `ScriptProcessorNode`. The GitHub Pages site and the workflow's `web` and `pages` jobs have not run yet.
 - Live window resize by dragging. The layout is recomputed from the drawable size every frame, but that path has only been exercised through the screenshot size and unit tests.
 - Long sessions, high-DPI displays, multiple monitors and audio device changes at runtime.
 
@@ -149,7 +160,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - The fonts cover only space, A-Z, 0-9 and `: . - ! ? < >`; lowercase uses the uppercase glyph and other characters are skipped, so a key name such as `[` shows as a gap on the controls screen.
 - One music track, looping the whole time, the same in menus and in play. Mute (`M`) is not saved; only the volume and the music level are.
 - No player names in the score table, and no way to clear it short of deleting `save.txt`.
-- No gamepad, replay or CI. Releases are built only when a tag is pushed: a single x86_64 binary for Linux, a single x86_64 `.exe` for Windows and a universal `Tetris.app` in a `.dmg` for macOS, by the scripts under `packaging/` and `.github/workflows/release.yml`. Neither the Windows nor the macOS build is signed with a paid certificate, so both systems warn before the first launch.
+- No gamepad, replay or CI. Releases are built only when a tag is pushed: a single x86_64 binary for Linux, a single x86_64 `.exe` for Windows and a universal `Tetris.app` in a `.dmg` for macOS, and the browser version on GitHub Pages, by the scripts under `packaging/` and `.github/workflows/release.yml`. Neither the Windows nor the macOS build is signed with a paid certificate, so both systems warn before the first launch.
 
 ### Rough edges
 
@@ -166,11 +177,11 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ## Planned milestones
 
-None. Milestone 8 was the last planned one; the next step comes from the list below.
+None. Milestone 9 came from the list below, and so will the next step.
 
 ## Later / ideas
 
 - **Replays.** The core is already deterministic: a seed plus a per-tick input sequence replays a run. Record `held` and `pressed` per tick, add a small replay file format and a playback mode. The main work is a stable encoding and a way to stop or seek, not a change to the rules.
 - **Gamepad support.** Map SDL gamepad events to `GameAction` in `src/app/input_sdl.c`. The core already takes a bitmask, so no rules change is needed.
 - **CI.** Build and run the tests on Linux, Windows and macOS. A Linux sanitizer job and a shader-compile smoke test would catch most regressions.
-- **Packaging.** Linux ships as a single binary with the shaders built in. Windows and macOS still need their own builds.
+- **Touch controls.** The browser version needs a keyboard. On-screen buttons, or swipes, would make it playable on a phone; the canvas already follows the page size.

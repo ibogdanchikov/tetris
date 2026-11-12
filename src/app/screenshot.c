@@ -5,7 +5,8 @@
 #include <string.h>
 
 #include <SDL3/SDL.h>
-#include <glad/gl.h>
+
+#include "render/gl.h"
 
 bool screenshot_save_bmp(int fb_width, int fb_height, const char *path)
 {

@@ -10,7 +10,9 @@
  * half of saving; the format itself is in src/app/save.h.
  *
  * The file is SAVE_FILE_NAME inside SDL_GetPrefPath("", SAVE_FILE_APP), for
- * example ~/.local/share/tetris/save.txt on Linux.
+ * example ~/.local/share/tetris/save.txt on Linux. The browser build keeps the
+ * same text in localStorage instead (src/app/save_file_web.c), and its "path"
+ * is the storage key, "tetris/save.txt".
  */
 
 #define SAVE_FILE_APP "tetris"

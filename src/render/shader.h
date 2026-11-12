@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glad/gl.h>
+#include "render/gl.h"
 
 /*
  * Compiles and links a vertex/fragment shader pair. Prints the compiler and

@@ -7,6 +7,10 @@
 
 #include <SDL3/SDL.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "app/input_buffer.h"
 #include "app/input_sdl.h"
 #include "app/menu.h"
@@ -258,6 +262,13 @@ typedef struct App {
     /* Tick of the last move tick sound, so ARR does not machine-gun it. */
     uint64_t last_move_sound_tick;
     bool have_move_sound;
+
+    /* The frame loop: the command line, the frames drawn so far, when the last
+       one started, and the exit code. */
+    AppOptions options;
+    long frames_rendered;
+    double last_time;
+    int exit_code;
 } App;
 
 /*
@@ -368,7 +379,12 @@ static bool app_handle_menu_command(App *app, MenuCommand command)
         audio_play(&app->audio, SOUND_ROTATE, APP_MENU_SCREEN_GAIN);
         break;
     case MENU_COMMAND_QUIT:
+#ifdef __EMSCRIPTEN__
+        /* A page cannot close itself; the player closes the tab instead. */
+        break;
+#else
         return true;
+#endif
     case MENU_COMMAND_NONE:
     default:
         break;
@@ -506,27 +522,140 @@ static void app_draw(App *app, float alpha, double now)
     renderer_end(&app->renderer);
 }
 
+/*
+ * One iteration of the frame loop: events, ticks, effects, sounds, saving and
+ * drawing. Returns false once the app should stop, after the last frame.
+ */
+static bool app_frame(App *app)
+{
+    /* Events arrive at frame rate; game presses are buffered until a tick. */
+    bool quit = false;
+    SDL_Event event;
+    while (platform_next_event(&app->platform, &event)) {
+        if (app_handle_event(app, &event)) {
+            quit = true;
+        }
+    }
+
+    const double now = platform_time_seconds();
+    double frame_time = now - app->last_time;
+    app->last_time = now;
+    if (frame_time > MAX_FRAME_SECONDS) {
+        frame_time = MAX_FRAME_SECONDS;
+    } else if (frame_time < 0.0) {
+        frame_time = 0.0;
+    }
+
+    /*
+     * Only a running game ticks. Every other screen drops the backlog and
+     * any buffered keys, so nothing pressed in a menu fires on resume.
+     * Effects keep moving on the game-over screen, so the last burst
+     * finishes; pause freezes them with the game.
+     */
+    const Screen screen = app->menu.screen;
+    if (screen == SCREEN_PLAYING) {
+        const uint32_t frame_events = app_simulate(app, frame_time);
+        fx_on_events(&app->fx, frame_events, &app->game);
+        fx_update(&app->fx, (float)frame_time);
+        app_play_event_sounds(app, frame_events);
+        if (app->game.game_over) {
+            app_finish_run(app);
+        }
+    } else {
+        input_buffer_reset(&app->input);
+        app->accumulator = 0.0;
+        if (screen == SCREEN_GAME_OVER) {
+            fx_update(&app->fx, (float)frame_time);
+        }
+    }
+
+#ifdef __EMSCRIPTEN__
+    /* The browser writes a change at once: a localStorage write is cheap, and
+       a tab that is closed or hidden gets no later frame to save in. */
+    if (app->settings_dirty) {
+        app_save(app);
+    }
+#else
+    /* Settings are written once the player leaves the screens that change
+       them, not on every arrow press. */
+    if (app->settings_dirty && app->menu.screen != SCREEN_SETTINGS &&
+        app->menu.screen != SCREEN_CONTROLS && app->menu.screen != SCREEN_MAIN_MENU) {
+        app_save(app);
+    }
+#endif
+
+    const float alpha =
+        app->menu.screen == SCREEN_PLAYING ? (float)(app->accumulator / SIM_DT) : 0.0f;
+    app_draw(app, alpha, now);
+
+    ++app->frames_rendered;
+    const long frame_limit = app->options.frames;
+    const bool last_frame = quit || (frame_limit > 0 && app->frames_rendered >= frame_limit);
+
+    /* Read the back buffer before presenting it: after the swap it is undefined. */
+    if (last_frame && app->options.screenshot_path != NULL) {
+        int fb_width = 0;
+        int fb_height = 0;
+        platform_drawable_size(&app->platform, &fb_width, &fb_height);
+        if (!screenshot_save_bmp(fb_width, fb_height, app->options.screenshot_path)) {
+            app->exit_code = 1;
+        }
+    }
+
+    platform_swap(&app->platform);
+    return !last_frame;
+}
+
+static void app_shutdown(App *app)
+{
+    if (app->settings_dirty) {
+        app_save(app);
+    }
+
+    SDL_Log("rendered %ld frames, simulation tick %llu", app->frames_rendered,
+            (unsigned long long)app->game.tick);
+
+    audio_shutdown(&app->audio);
+    renderer_shutdown(&app->renderer);
+    platform_shutdown(&app->platform);
+}
+
+#ifdef __EMSCRIPTEN__
+/*
+ * The browser calls this once per animation frame. main has returned by then,
+ * so the app shuts itself down here when the loop ends.
+ */
+static void app_browser_frame(void *userdata)
+{
+    App *app = userdata;
+    if (!app_frame(app)) {
+        app_shutdown(app);
+        emscripten_cancel_main_loop();
+    }
+}
+#endif
+
 int main(int argc, char **argv)
 {
-    AppOptions options;
-    if (!app_parse_args(argc, argv, &options)) {
+    /* Large state (the particle pool, the voice buffers) lives here, not on the stack. */
+    static App app;
+
+    if (!app_parse_args(argc, argv, &app.options)) {
         app_print_usage(argv[0]);
         return 2;
     }
-    if (options.show_help) {
+    const AppOptions *options = &app.options;
+    if (options->show_help) {
         app_print_usage(argv[0]);
         return 0;
     }
 
     char shader_dir[1024];
-    if (!app_shader_dir(options.assets_dir, shader_dir, sizeof shader_dir)) {
+    if (!app_shader_dir(options->assets_dir, shader_dir, sizeof shader_dir)) {
         return 1;
     }
 
-    /* Large state (the particle pool, the voice buffers) lives here, not on the stack. */
-    static App app;
-
-    if (!platform_init(&app.platform, APP_TITLE, options.width, options.height)) {
+    if (!platform_init(&app.platform, APP_TITLE, options->width, options->height)) {
         fprintf(stderr, "error: platform initialisation failed\n");
         return 1;
     }
@@ -547,7 +676,7 @@ int main(int argc, char **argv)
     }
 
     /* A board exists from the start, so every screen has a game to read. */
-    app.base_seed = options.seed;
+    app.base_seed = options->seed;
     const GameConfig config = settings_game_config(&app.save.settings);
     game_init_with_config(&app.game, app.base_seed, &config);
 
@@ -556,110 +685,35 @@ int main(int argc, char **argv)
      * seed but never shared with the game, so particle jitter cannot change the
      * piece order.
      */
-    fx_init(&app.fx, options.seed);
+    fx_init(&app.fx, options->seed);
 
     /*
      * Audio is optional: a missing device just logs a warning and every sound
      * call becomes a no-op, so the game always starts.
      */
     (void)audio_init(&app.audio);
-    if (options.mute) {
+    if (options->mute) {
         audio_set_muted(&app.audio, true);
     }
     app_apply_settings(&app);
 
     input_buffer_reset(&app.input);
     menu_init(&app.menu);
-    if (options.play) {
+    if (options->play) {
         app_start_run(&app);
     }
 
-    int exit_code = 0;
-    long frames_rendered = 0;
-    double last_time = platform_time_seconds();
-    bool quit = false;
+    app.last_time = platform_time_seconds();
 
-    while (!quit) {
-        /* Events arrive at frame rate; game presses are buffered until a tick. */
-        SDL_Event event;
-        while (platform_next_event(&app.platform, &event)) {
-            if (app_handle_event(&app, &event)) {
-                quit = true;
-            }
-        }
-
-        const double now = platform_time_seconds();
-        double frame_time = now - last_time;
-        last_time = now;
-        if (frame_time > MAX_FRAME_SECONDS) {
-            frame_time = MAX_FRAME_SECONDS;
-        } else if (frame_time < 0.0) {
-            frame_time = 0.0;
-        }
-
-        /*
-         * Only a running game ticks. Every other screen drops the backlog and
-         * any buffered keys, so nothing pressed in a menu fires on resume.
-         * Effects keep moving on the game-over screen, so the last burst
-         * finishes; pause freezes them with the game.
-         */
-        const Screen screen = app.menu.screen;
-        if (screen == SCREEN_PLAYING) {
-            const uint32_t frame_events = app_simulate(&app, frame_time);
-            fx_on_events(&app.fx, frame_events, &app.game);
-            fx_update(&app.fx, (float)frame_time);
-            app_play_event_sounds(&app, frame_events);
-            if (app.game.game_over) {
-                app_finish_run(&app);
-            }
-        } else {
-            input_buffer_reset(&app.input);
-            app.accumulator = 0.0;
-            if (screen == SCREEN_GAME_OVER) {
-                fx_update(&app.fx, (float)frame_time);
-            }
-        }
-
-        /* Settings are written once the player leaves the screens that change
-           them, not on every arrow press. */
-        if (app.settings_dirty && app.menu.screen != SCREEN_SETTINGS &&
-            app.menu.screen != SCREEN_CONTROLS && app.menu.screen != SCREEN_MAIN_MENU) {
-            app_save(&app);
-        }
-
-        const float alpha =
-            app.menu.screen == SCREEN_PLAYING ? (float)(app.accumulator / SIM_DT) : 0.0f;
-        app_draw(&app, alpha, now);
-
-        ++frames_rendered;
-        const bool last_frame = quit || (options.frames > 0 && frames_rendered >= options.frames);
-
-        /* Read the back buffer before presenting it: after the swap it is undefined. */
-        if (last_frame && options.screenshot_path != NULL) {
-            int fb_width = 0;
-            int fb_height = 0;
-            platform_drawable_size(&app.platform, &fb_width, &fb_height);
-            if (!screenshot_save_bmp(fb_width, fb_height, options.screenshot_path)) {
-                exit_code = 1;
-            }
-        }
-
-        platform_swap(&app.platform);
-
-        if (last_frame) {
-            break;
-        }
+#ifdef __EMSCRIPTEN__
+    /* The browser owns the loop: it calls back once per animation frame, and
+       main does not return. */
+    emscripten_set_main_loop_arg(app_browser_frame, &app, 0, true);
+    return 0;
+#else
+    while (app_frame(&app)) {
     }
-
-    if (app.settings_dirty) {
-        app_save(&app);
-    }
-
-    SDL_Log("rendered %ld frames, simulation tick %llu", frames_rendered,
-            (unsigned long long)app.game.tick);
-
-    audio_shutdown(&app.audio);
-    renderer_shutdown(&app.renderer);
-    platform_shutdown(&app.platform);
-    return exit_code;
+    app_shutdown(&app);
+    return app.exit_code;
+#endif
 }

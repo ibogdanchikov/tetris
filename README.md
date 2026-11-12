@@ -6,9 +6,18 @@ See `ARCHITECTURE.md` for modules and design decisions, and `ROADMAP.md` for com
 
 ## Download and play
 
-Every release has the game for Linux, Windows and macOS. Nothing else needs to
-be installed: SDL3 and the shaders are built in. The controls are listed under
-[Controls](#controls).
+Every release has the game for Linux, Windows and macOS, and a browser version.
+Nothing else needs to be installed: SDL3 and the shaders are built in. The
+controls are listed under [Controls](#controls).
+
+### In the browser
+
+Play the latest release at <https://ibogdanchikov.github.io/tetris/>. It needs
+a keyboard and a browser with WebGL 2: current Chrome, Edge, Firefox or Safari.
+The game fills the browser window and follows its size. Browsers keep a page
+silent until it is used, so the sound starts with the first key press. Settings
+and scores are kept in the browser's storage for the page, and clearing the
+site's data clears them too. There is no **QUIT**: close the tab instead.
 
 ### Linux
 
@@ -218,8 +227,27 @@ binaries for Apple silicon and Intel with macOS 11 as the minimum, runs the
 tests, puts the executable in `Tetris.app` with an `Info.plist`, signs the app
 ad hoc and packs it in a disk image with a link to `/Applications`.
 
-`.github/workflows/release.yml` runs all three scripts. Pushing a `v*` tag
-publishes the three files on a GitHub release:
+```sh
+packaging/web/build.sh
+```
+
+This builds the browser version into `dist/web`: `index.html`, `tetris.js` and
+`tetris.wasm`. It needs only Docker: the build runs Emscripten in the
+`emscripten/emsdk` image (`packaging/web/Dockerfile`), with SDL3 built from the
+same release as the desktop builds. The tests are built as WebAssembly too and
+run under Node.js. The files are static, but browsers do not run WebAssembly
+from `file://`, so serve the directory to try it:
+
+```sh
+python3 -m http.server --directory dist/web 8000
+```
+
+and open <http://localhost:8000>. The page around the game is
+`packaging/web/shell.html`.
+
+`.github/workflows/release.yml` runs all four scripts. Pushing a `v*` tag
+publishes the three downloads on a GitHub release and the browser version on
+the `gh-pages` branch, which GitHub Pages serves:
 
 ```sh
 git tag v0.1.0
@@ -266,7 +294,7 @@ These keys are fixed and cannot be bound to an action:
 
 | Key | Action |
 | --- | --- |
-| Escape | Pause while playing; back one screen in a menu; quit from the title |
+| Escape | Pause while playing; back one screen in a menu; quit from the title (not in the browser) |
 | P | Pause or resume |
 | R | Restart with a fresh seed (while playing, paused or after game over) |
 | M | Mute or unmute the sound |
@@ -287,7 +315,8 @@ ignored and DAS/ARR produce the repeats. In the menus a held arrow repeats.
   ENTER**.
 - **Main menu**: **START**, **MODE** (Marathon, Sprint or Ultra), **LEVEL** (the
   start level, 1 to 15; Marathon only, it reads `-` in the other modes),
-  **HIGH SCORES**, **SETTINGS** and **QUIT**. Left and Right change the values.
+  **HIGH SCORES**, **SETTINGS** and **QUIT** (not in the browser, where a page
+  cannot close itself). Left and Right change the values.
 - **Pause**: **RESUME**, **RESTART**, **SETTINGS** and **MAIN MENU**, over the
   dimmed board. Leaving for the main menu drops the run without a score.
 - **Results**: **CLEAR!** with the time for a finished Sprint, **TIME UP** with
@@ -354,6 +383,9 @@ you leave the settings screens, and a score as soon as the run ends. A missing
 file gives the defaults; a file without the magic line or with an unknown version
 logs a warning and gives the defaults too. Unknown keys and malformed lines are
 skipped, and values out of range are clamped.
+
+The browser version keeps the same text in the page's `localStorage` under the
+key `tetris/save.txt`, and writes a changed setting at once.
 
 ### HUD
 

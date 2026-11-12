@@ -13,7 +13,9 @@ typedef struct Platform {
 /*
  * Creates a resizable, high-pixel-density window with an OpenGL 3.3 core
  * profile context, makes it current, loads GL through glad and enables vsync
- * when the driver allows it. Returns false on any failure.
+ * when the driver allows it. In the browser the window is the canvas, filling
+ * the page, with an OpenGL ES 3.0 (WebGL 2) context. Returns false on any
+ * failure.
  */
 bool platform_init(Platform *platform, const char *title, int width, int height);
 

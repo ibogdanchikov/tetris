@@ -2,7 +2,7 @@
 
 #include <stdbool.h>
 
-#include <glad/gl.h>
+#include "render/gl.h"
 
 typedef struct Color {
     float r;
