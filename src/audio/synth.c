@@ -138,6 +138,21 @@ static const SynthNote PAUSE_NOTES[] = {
     NOTE(0.060f, 0.110f, 880.0f, 660.0f, 0.12f, 0.004f, 0.060f, 0.55f, SYNTH_WAVE_SINE),
 };
 
+/*
+ * A finished run: a quick rising run up C major, then a held chord with a
+ * bright fifth on top. It answers the game-over phrase, which walks down.
+ */
+static const SynthNote FINISH_NOTES[] = {
+    NOTE(0.000f, 0.110f, 523.0f, 523.0f, 0.15f, 0.005f, 0.060f, 0.50f, SYNTH_WAVE_SQUARE),
+    NOTE(0.080f, 0.110f, 659.0f, 659.0f, 0.15f, 0.005f, 0.060f, 0.50f, SYNTH_WAVE_SQUARE),
+    NOTE(0.160f, 0.110f, 784.0f, 784.0f, 0.15f, 0.005f, 0.060f, 0.50f, SYNTH_WAVE_SQUARE),
+    NOTE(0.240f, 0.700f, 1046.0f, 1046.0f, 0.14f, 0.008f, 0.350f, 0.55f, SYNTH_WAVE_SQUARE),
+    NOTE(0.240f, 0.700f, 523.0f, 523.0f, 0.10f, 0.015f, 0.350f, 0.55f, SYNTH_WAVE_SINE),
+    NOTE(0.240f, 0.700f, 659.0f, 659.0f, 0.10f, 0.015f, 0.350f, 0.55f, SYNTH_WAVE_SINE),
+    NOTE(0.240f, 0.700f, 784.0f, 784.0f, 0.10f, 0.015f, 0.350f, 0.55f, SYNTH_WAVE_SINE),
+    NOTE(0.320f, 0.620f, 1568.0f, 1568.0f, 0.06f, 0.010f, 0.300f, 0.60f, SYNTH_WAVE_SINE),
+};
+
 typedef struct SynthSound {
     const SynthNote *notes;
     int count;
@@ -151,6 +166,7 @@ static const SynthSound SOUNDS[SOUND_COUNT] = {
     SOUND(MOVE),       SOUND(ROTATE),   SOUND(HOLD),      SOUND(HARD_DROP),
     SOUND(LOCK),       SOUND(CLEAR_1),  SOUND(CLEAR_2),   SOUND(CLEAR_3),
     SOUND(CLEAR_4),    SOUND(LEVEL_UP), SOUND(GAME_OVER), SOUND(PAUSE),
+    SOUND(FINISH),
 };
 
 const char *synth_name(SoundId id)

@@ -106,6 +106,12 @@ size, the glow comes from the same texture, and the menus now fit their text to
 the room they have instead of stepping a whole pixel at a time. The old pixel
 font stays as the fallback.
 
+**Milestone 8** adds game modes. **MODE** on the main menu picks Marathon (the
+endless game), Sprint (40 lines as fast as you can) or Ultra (as many points as
+you can in two minutes). Sprint and Ultra stay at level 1, the HUD shows their
+clock, a finished run gets a **CLEAR!** or **TIME UP** results screen and a
+fanfare, and each mode keeps its own top ten.
+
 ## Requirements
 
 - CMake >= 3.24, Ninja, a C17 compiler (gcc or clang)
@@ -228,15 +234,35 @@ ignored and DAS/ARR produce the repeats. In the menus a held arrow repeats.
 
 ### Screens
 
-- **Title**: the seven pieces, the best score so far and **PRESS ENTER**.
-- **Main menu**: **START**, **LEVEL** (the start level, 1 to 15, changed with
-  Left and Right), **HIGH SCORES**, **SETTINGS** and **QUIT**.
+- **Title**: the seven pieces, the best run of the selected mode and **PRESS
+  ENTER**.
+- **Main menu**: **START**, **MODE** (Marathon, Sprint or Ultra), **LEVEL** (the
+  start level, 1 to 15; Marathon only, it reads `-` in the other modes),
+  **HIGH SCORES**, **SETTINGS** and **QUIT**. Left and Right change the values.
 - **Pause**: **RESUME**, **RESTART**, **SETTINGS** and **MAIN MENU**, over the
   dimmed board. Leaving for the main menu drops the run without a score.
-- **Game over**: the score, **NEW HIGH SCORE!** or the run's place in the table,
-  **PLAY AGAIN** and **MAIN MENU**.
-- **High scores**: the top ten runs with their score, level and lines. The run
-  that just ended is highlighted.
+- **Results**: **CLEAR!** with the time for a finished Sprint, **TIME UP** with
+  the score for Ultra, **GAME OVER** with the score after a top-out; then **NEW
+  BEST TIME!**, **NEW HIGH SCORE!** or the run's place in its table, **PLAY
+  AGAIN** and **MAIN MENU**.
+- **High scores**: one table per mode, Left and Right to switch: score, level and
+  lines for Marathon, time and lines for Sprint, score and lines for Ultra. It
+  opens on the selected mode, and the run that just ended is highlighted.
+
+### Modes
+
+| Mode | Goal | Ends | Ranked by |
+| --- | --- | --- | --- |
+| Marathon | none, the levels rise every ten lines | at a top-out | score |
+| Sprint | 40 lines, at level 1 | on the lock that reaches 40 lines | time |
+| Ultra | two minutes, at level 1 | at 2:00.00, or at a top-out | score |
+
+Times are counted in game ticks, 60 a second, so a pause does not count and a
+replay of a run gives the same time to the tick. They are shown as `M:SS.CC`.
+A Sprint that tops out is lost and records nothing; an Ultra that tops out early
+still records its score. During play the HUD shows **SCORE**, **TIME** (up in
+Sprint, down in Ultra) and the lines still **TO GO** in Sprint or **LINES** in
+Ultra, in place of Marathon's **LEVEL**.
 - **Settings**: **VOLUME** (0 to 10), **MUSIC** (0 to 10, on top of the volume;
   0 turns it off), **EFFECTS** (0 to 10: particles, shake,
   flashes, trails and the level-up pulse; 0 turns them off), **BLOOM** (on or
@@ -265,9 +291,12 @@ bloom=1
 das=10
 arr=2
 start_level=1
+mode=sprint
 key.left=80 0
 key.hold=6 225
 score=12400 4 31 9600400441103183515
+sprint=5832 40 9600400441103183516
+ultra=48210 61 9600400441103183517
 ```
 
 The game writes it through a temporary file that is renamed over the old one, so
@@ -435,12 +464,15 @@ device is logged with its driver, name, format and rate.
   ends the game on the lock tick.
 - **Level** is `start_level + lines_cleared / 10`, so the run levels up every ten
   lines. The start level is picked on the main menu and saved with the
-  settings.
+  settings. Sprint and Ultra stay at level 1.
 - **DAS and ARR** default to 10 and 2 ticks and come from the settings. They are
   part of the run's `GameState`, so the core stays free of files and settings.
 - **Game over** is a block out (the new piece cannot spawn) or a lock out (a
-  piece locks with every cell in the hidden buffer rows). A game that is over
-  only advances the tick counter.
+  piece locks with every cell in the hidden buffer rows), which lose the run, or
+  a goal: the lock that reaches the line goal (Sprint, its full rows removed at
+  once) or the step that reaches the tick limit (Ultra, whatever the phase). A
+  game that is over only advances the tick counter; `end_tick` keeps how long
+  the run lasted.
 
 ### Command line flags
 
@@ -498,7 +530,11 @@ clamped and malformed values, key bindings and the score table. The scoring
 suite checks the T-spin rule corner by corner, a real T-spin double from a
 rotation, minis and the fifth-kick upgrade, losing a spin by dropping,
 back-to-back, combos, perfect clears, the clear label text and its fade, and
-that a run with spins replays exactly. They are a plain
+that a run with spins replays exactly. The modes suite checks the line goal
+(including a clear that passes it), the tick limit at its exact tick and in the
+middle of a clear, the fixed level, a Sprint replaying to the same tick, each
+mode's config, Sprint ranking by time, which runs are recorded, the new save
+keys, a 0.5.0 save file and the time format. They are a plain
 assert-style harness — no external framework — and they never link SDL or
 OpenGL.
 
@@ -560,6 +596,7 @@ tests/test_fx.c             particle, event-mapping, shake and clear-animation s
 tests/test_audio.c          synthesis, mixing and event-to-sound precedence suites
 tests/test_save.c           save file parser, serializer, bindings and score table suites
 tests/test_scoring.c        T-spin rule, back-to-back, combo, perfect clear and clear label suites
+tests/test_modes.c          line goal, tick limit, fixed level, mode configs, per-mode tables and save keys
 ```
 
 Targets: `glad` (static), `tetris_core` (static), `tetris_fx` (static),

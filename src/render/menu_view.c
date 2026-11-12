@@ -354,15 +354,30 @@ static void menu_view_draw_page(Renderer *renderer, const BoardLayout *layout,
 
 /* --- screens -------------------------------------------------------------- */
 
+/* What a mode's table ranks by, as text: a time for Sprint, a score otherwise. */
+static void menu_view_score_text(PlayMode mode, const HighScore *entry, char *out, size_t size)
+{
+    if (mode == PLAY_SPRINT) {
+        menu_format_ticks(entry->ticks, out, size);
+    } else {
+        snprintf(out, size, "%lu", (unsigned long)entry->score);
+    }
+}
+
 static void menu_view_draw_title(Renderer *renderer, const BoardLayout *layout,
                                  const MenuViewState *state)
 {
     const LayoutRect area = menu_view_group_rect(layout);
     menu_view_draw_panel(renderer, area, layout->cell_size);
 
-    char best[32] = "";
-    if (state->save->score_count > 0) {
-        snprintf(best, sizeof best, "BEST %lu", (unsigned long)state->save->scores[0].score);
+    /* The best run of the selected mode. */
+    const PlayMode mode = (PlayMode)state->settings->mode;
+    const ScoreTable *table = &state->save->tables[mode];
+    char best[48] = "";
+    if (table->count > 0) {
+        char value[24];
+        menu_view_score_text(mode, &table->entries[0], value, sizeof value);
+        snprintf(best, sizeof best, "%s BEST %s", play_mode_name(mode), value);
     }
 
     MenuViewPage page;
@@ -417,19 +432,37 @@ static void menu_view_draw_board_menu(Renderer *renderer, const BoardLayout *lay
     menu_view_draw_page(renderer, layout, state, &page);
 }
 
+/*
+ * The results of a run: CLEAR! with the time for a finished Sprint, TIME UP
+ * with the score for Ultra, GAME OVER with the score for a top-out, and the
+ * run's place in its table when it made one.
+ */
 static void menu_view_draw_game_over(Renderer *renderer, const BoardLayout *layout,
                                      const MenuViewState *state)
 {
-    char score[32];
-    snprintf(score, sizeof score, "SCORE %lu", (unsigned long)state->game->score);
+    const GameState *game = state->game;
+    const char *title = "GAME OVER";
+    char result[32];
+    if (game->game_over_reason == GAME_OVER_LINE_GOAL) {
+        title = "CLEAR!";
+        char time[24];
+        menu_format_ticks(game_run_ticks(game), time, sizeof time);
+        snprintf(result, sizeof result, "TIME %s", time);
+    } else {
+        if (game->game_over_reason == GAME_OVER_TIME_UP) {
+            title = "TIME UP";
+        }
+        snprintf(result, sizeof result, "SCORE %lu", (unsigned long)game->score);
+    }
 
     char rank[32] = "";
     if (state->menu->last_rank == 0) {
-        snprintf(rank, sizeof rank, "NEW HIGH SCORE!");
+        snprintf(rank, sizeof rank,
+                 state->menu->last_mode == PLAY_SPRINT ? "NEW BEST TIME!" : "NEW HIGH SCORE!");
     } else if (state->menu->last_rank > 0) {
         snprintf(rank, sizeof rank, "RANK %d", state->menu->last_rank + 1);
     }
-    menu_view_draw_board_menu(renderer, layout, state, "GAME OVER", score,
+    menu_view_draw_board_menu(renderer, layout, state, title, result,
                               rank[0] != '\0' ? rank : NULL);
 }
 
@@ -539,7 +572,30 @@ static void menu_view_draw_controls(Renderer *renderer, const BoardLayout *layou
                             MENU_HINT_COLOR, MENU_HINT_GLOW, hint);
 }
 
-/* The score table. Every line has the same length, so the columns line up. */
+/*
+ * One line of a score table; every line of a mode has the same length, so the
+ * columns line up. Marathon shows score, level and lines; Sprint time and
+ * lines; Ultra score and lines. A NULL entry is an empty place.
+ */
+static void menu_view_score_line(PlayMode mode, int place, const HighScore *entry, char *out,
+                                 size_t size)
+{
+    char value[24] = "-";
+    char lines[16] = "-";
+    char level[16] = "-";
+    if (entry != NULL) {
+        menu_view_score_text(mode, entry, value, sizeof value);
+        snprintf(lines, sizeof lines, "%lu", (unsigned long)entry->lines);
+        snprintf(level, sizeof level, "%lu", (unsigned long)entry->level);
+    }
+    if (mode == PLAY_MARATHON) {
+        snprintf(out, size, "%2d.  %10s  %3s  %5s", place, value, level, lines);
+    } else {
+        snprintf(out, size, "%2d.  %10s  %5s", place, value, lines);
+    }
+}
+
+/* The score table of the mode menu->score_mode, LEFT and RIGHT switching modes. */
 static void menu_view_draw_high_scores(Renderer *renderer, const BoardLayout *layout,
                                        const MenuViewState *state)
 {
@@ -548,22 +604,25 @@ static void menu_view_draw_high_scores(Renderer *renderer, const BoardLayout *la
 
     const int cell = layout->cell_size;
     const int inner = menu_view_max(1, (int)area.w - 2 * cell);
+    const PlayMode mode = (PlayMode)state->menu->score_mode;
+    const ScoreTable *table = &state->save->tables[mode];
+
     char lines[SAVE_MAX_SCORES + 1][48];
-    snprintf(lines[0], sizeof lines[0], "%3s  %10s  %3s  %5s", "", "SCORE", "LV", "LINES");
-    for (int i = 0; i < SAVE_MAX_SCORES; ++i) {
-        if (i < state->save->score_count) {
-            const HighScore *entry = &state->save->scores[i];
-            snprintf(lines[i + 1], sizeof lines[i + 1], "%2d.  %10lu  %3lu  %5lu", i + 1,
-                     (unsigned long)entry->score, (unsigned long)entry->level,
-                     (unsigned long)entry->lines);
-        } else {
-            snprintf(lines[i + 1], sizeof lines[i + 1], "%2d.  %10s  %3s  %5s", i + 1, "-",
-                     "-", "-");
-        }
+    if (mode == PLAY_MARATHON) {
+        snprintf(lines[0], sizeof lines[0], "%3s  %10s  %3s  %5s", "", "SCORE", "LV", "LINES");
+    } else {
+        snprintf(lines[0], sizeof lines[0], "%3s  %10s  %5s", "",
+                 mode == PLAY_SPRINT ? "TIME" : "SCORE", "LINES");
     }
+    for (int i = 0; i < SAVE_MAX_SCORES; ++i) {
+        menu_view_score_line(mode, i + 1, i < table->count ? &table->entries[i] : NULL,
+                             lines[i + 1], sizeof lines[i + 1]);
+    }
+    char mode_line[32];
+    snprintf(mode_line, sizeof mode_line, "< %s >", play_mode_name(mode));
 
     const char *title = "HIGH SCORES";
-    const char *hint = "ESC BACK";
+    const char *hint = "LEFT RIGHT MODE   ESC BACK";
     const float title_pixel =
         menu_view_fit(renderer, (float)inner, (int)strlen(title), (float)cell / 4.0f);
     const float title_h = (float)FONT_GLYPH_H * title_pixel;
@@ -576,25 +635,30 @@ static void menu_view_draw_high_scores(Renderer *renderer, const BoardLayout *la
         pitch = (float)FONT_GLYPH_H * pixel * 1.7f;
         const float room =
             area.h - (float)cell - hint_room - title_h - menu_view_title_gap(pixel, cell);
-        if ((float)(SAVE_MAX_SCORES + 1) * pitch <= room || pixel <= 1.0f) {
+        if ((float)(SAVE_MAX_SCORES + 2) * pitch <= room || pixel <= 1.0f) {
             break;
         }
         pixel = menu_view_shrink(renderer, pixel);
     }
 
+    /* Title, the mode, the header and the ten places. */
     const float row_h = (float)FONT_GLYPH_H * pixel;
     const float title_gap = menu_view_title_gap(pixel, cell);
-    const float total = title_h + title_gap + (float)(SAVE_MAX_SCORES + 1) * pitch;
+    const float total = title_h + title_gap + (float)(SAVE_MAX_SCORES + 2) * pitch;
     float top = area.y + hint_room + (area.h - hint_room + total) * 0.5f;
     menu_view_text_centered(renderer, area.x, area.w, top - title_h, title_pixel,
                             MENU_TITLE_COLOR, MENU_TITLE_GLOW, title);
     top -= title_h + title_gap;
+    menu_view_text_centered(renderer, area.x, area.w, menu_view_round(top - row_h), pixel,
+                            MENU_SELECTED_COLOR, MENU_SELECTED_GLOW, mode_line);
+    top -= pitch;
 
     const float x = menu_view_round(area.x + (area.w - menu_view_text_width(lines[0], pixel)) *
                                                  0.5f);
     for (int i = 0; i <= SAVE_MAX_SCORES; ++i) {
         const bool header = i == 0;
-        const bool latest = !header && i - 1 == state->menu->last_rank;
+        const bool latest =
+            !header && i - 1 == state->menu->last_rank && (int)mode == state->menu->last_mode;
         const Color color = header ? MENU_TEXT_COLOR
                                    : (latest ? MENU_SELECTED_COLOR : MENU_VALUE_COLOR);
         text_draw(renderer, x, menu_view_round(top - row_h), pixel, color,

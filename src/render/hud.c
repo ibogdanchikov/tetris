@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app/menu.h"
 #include "render/board_view.h"
 #include "render/font.h"
 #include "render/text.h"
@@ -92,8 +93,8 @@ static void hud_draw_next(Renderer *renderer, const BoardLayout *layout, const G
 }
 
 /*
- * One label above one value, left-aligned. The value shrinks a pixel at a time
- * until it fits the panel, so a ten-digit score does not run over the board.
+ * One label above one value, left-aligned. The value shrinks until it fits the
+ * panel, so a ten-digit score or a time does not run over the board.
  */
 static void hud_draw_stat(Renderer *renderer, const BoardLayout *layout, float x, float top,
                           const char *label, const char *value)
@@ -101,9 +102,19 @@ static void hud_draw_stat(Renderer *renderer, const BoardLayout *layout, float x
     const int label_pixel = layout->text_pixel;
     const float label_height = (float)(FONT_GLYPH_H * label_pixel);
     const float value_gap = (float)(HUD_STAT_VALUE_GAP_PIXELS * label_pixel);
-    const int value_pixel = board_layout_fit_text_pixel(
-        (int)layout->stats_area.w - 2 * hud_padding(layout), (int)strlen(value), label_pixel);
-    const float value_height = (float)(FONT_GLYPH_H * value_pixel);
+    const int width = (int)layout->stats_area.w - 2 * hud_padding(layout);
+
+    /* With the font atlas a long value shrinks only as far as it must; the
+       pixel font shrinks a whole pixel at a time. */
+    const int glyphs = (int)strlen(value);
+    float value_pixel = (float)board_layout_fit_text_pixel(width, glyphs, label_pixel);
+    if (renderer_has_font(renderer) && glyphs > 0) {
+        const int units = glyphs * (FONT_GLYPH_W + FONT_GLYPH_SPACING) - FONT_GLYPH_SPACING;
+        const float fit = (float)width / (float)units;
+        value_pixel = fit < (float)label_pixel ? fit : (float)label_pixel;
+        value_pixel = value_pixel < 1.0f ? 1.0f : value_pixel;
+    }
+    const float value_height = (float)FONT_GLYPH_H * value_pixel;
 
     text_draw(renderer, x, top - label_height, label_pixel, HUD_LABEL_COLOR, HUD_LABEL_GLOW,
               label);
@@ -114,12 +125,33 @@ static void hud_draw_stat(Renderer *renderer, const BoardLayout *layout, float x
 /* Draws the stats and returns how far down they reach, in framebuffer pixels. */
 static float hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const GameState *game)
 {
+    /*
+     * Marathon shows the level; a run with a goal stays at one level, so it
+     * shows the time instead: Sprint counts up and shows the lines still to
+     * go, Ultra counts down to its limit.
+     */
     char score[16];
-    char level[16];
-    char lines[16];
+    char middle[24];
+    char last[16];
+    const char *middle_label = "LEVEL";
+    const char *last_label = "LINES";
     snprintf(score, sizeof score, "%u", (unsigned)game->score);
-    snprintf(level, sizeof level, "%u", (unsigned)game->level);
-    snprintf(lines, sizeof lines, "%u", (unsigned)game->lines_cleared);
+    snprintf(middle, sizeof middle, "%u", (unsigned)game->level);
+    snprintf(last, sizeof last, "%u", (unsigned)game->lines_cleared);
+
+    const uint64_t ticks = game_run_ticks(game);
+    if (game->line_goal > 0) {
+        middle_label = "TIME";
+        menu_format_ticks(ticks, middle, sizeof middle);
+        last_label = "TO GO";
+        const uint32_t to_go =
+            game->lines_cleared < game->line_goal ? game->line_goal - game->lines_cleared : 0;
+        snprintf(last, sizeof last, "%u", (unsigned)to_go);
+    } else if (game->tick_limit > 0) {
+        middle_label = "TIME";
+        menu_format_ticks(ticks < game->tick_limit ? game->tick_limit - ticks : 0, middle,
+                          sizeof middle);
+    }
 
     const float pad = (float)hud_padding(layout);
     const float x = layout->stats_area.x + pad;
@@ -131,9 +163,9 @@ static float hud_draw_stats(Renderer *renderer, const BoardLayout *layout, const
     float top = layout->stats_area.y + layout->stats_area.h - pad;
     hud_draw_stat(renderer, layout, x, top, "SCORE", score);
     top -= stride;
-    hud_draw_stat(renderer, layout, x, top, "LEVEL", level);
+    hud_draw_stat(renderer, layout, x, top, middle_label, middle);
     top -= stride;
-    hud_draw_stat(renderer, layout, x, top, "LINES", lines);
+    hud_draw_stat(renderer, layout, x, top, last_label, last);
     return top - stride + (float)layout->cell_size;
 }
 

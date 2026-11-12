@@ -251,6 +251,7 @@ typedef struct App {
     uint64_t base_seed;
     uint32_t run_count;
     uint64_t run_seed;
+    PlayMode run_mode; /* the mode the current run was started in */
 
     double accumulator;
 
@@ -258,15 +259,6 @@ typedef struct App {
     uint64_t last_move_sound_tick;
     bool have_move_sound;
 } App;
-
-static GameConfig app_game_config(const Settings *settings)
-{
-    GameConfig config = game_default_config();
-    config.start_level = (uint32_t)settings->start_level;
-    config.das_ticks = (uint16_t)settings->das_ticks;
-    config.arr_ticks = (uint16_t)settings->arr_ticks;
-    return config;
-}
 
 /*
  * Pushes the settings into the parts that use them. The volume and music steps
@@ -295,10 +287,11 @@ static void app_save(App *app)
     app->settings_dirty = false;
 }
 
-/* Starts a new run with the saved start level and shift timing. */
+/* Starts a new run in the saved mode, with the saved start level and shift timing. */
 static void app_start_run(App *app)
 {
-    const GameConfig config = app_game_config(&app->save.settings);
+    const GameConfig config = settings_game_config(&app->save.settings);
+    app->run_mode = (PlayMode)app->save.settings.mode;
     app->run_seed = app->base_seed + app->run_count;
     ++app->run_count;
     game_init_with_config(&app->game, app->run_seed, &config);
@@ -328,17 +321,21 @@ static void app_resume(App *app)
     app->accumulator = 0.0;
 }
 
-/* The run ended: record it if it made the table and show the game-over menu. */
+/*
+ * The run ended, finished or lost: record it in its mode's table if it placed,
+ * and show the results. The score screen then opens on that mode, with the run
+ * highlighted.
+ */
 static void app_finish_run(App *app)
 {
-    const HighScore entry = { app->game.score, app->game.level, app->game.lines_cleared,
-                              app->run_seed };
-    const int rank = save_insert_score(&app->save, &entry);
+    const int rank = save_record_run(&app->save, app->run_mode, &app->game, app->run_seed);
     if (rank >= 0) {
         app_save(app);
     }
     menu_set_screen(&app->menu, SCREEN_GAME_OVER);
     app->menu.last_rank = rank;
+    app->menu.last_mode = app->run_mode;
+    app->menu.score_mode = app->run_mode;
 }
 
 /* Acts on what the menu asked for. Returns true when the app should quit. */
@@ -551,7 +548,7 @@ int main(int argc, char **argv)
 
     /* A board exists from the start, so every screen has a game to read. */
     app.base_seed = options.seed;
-    const GameConfig config = app_game_config(&app.save.settings);
+    const GameConfig config = settings_game_config(&app.save.settings);
     game_init_with_config(&app.game, app.base_seed, &config);
 
     /*

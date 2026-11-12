@@ -3,8 +3,8 @@
 #include <stdio.h>
 
 static const MenuItem MENU_MAIN_ITEMS[] = {
-    MENU_ITEM_START, MENU_ITEM_START_LEVEL, MENU_ITEM_HIGH_SCORES, MENU_ITEM_SETTINGS,
-    MENU_ITEM_QUIT,
+    MENU_ITEM_START,       MENU_ITEM_MODE,     MENU_ITEM_START_LEVEL,
+    MENU_ITEM_HIGH_SCORES, MENU_ITEM_SETTINGS, MENU_ITEM_QUIT,
 };
 
 static const MenuItem MENU_PAUSE_ITEMS[] = {
@@ -70,6 +70,8 @@ void menu_init(Menu *menu)
     menu->column = 0;
     menu->waiting_for_key = false;
     menu->last_rank = -1;
+    menu->last_mode = PLAY_MARATHON;
+    menu->score_mode = PLAY_MARATHON;
 }
 
 void menu_set_screen(Menu *menu, Screen screen)
@@ -122,6 +124,8 @@ const char *menu_item_label(MenuItem item)
     switch (item) {
     case MENU_ITEM_START:
         return "START";
+    case MENU_ITEM_MODE:
+        return "MODE";
     case MENU_ITEM_START_LEVEL:
         return "LEVEL";
     case MENU_ITEM_HIGH_SCORES:
@@ -166,6 +170,10 @@ const char *menu_item_label(MenuItem item)
 static int *menu_item_setting(MenuItem item, Settings *settings, int *out_min, int *out_max)
 {
     switch (item) {
+    case MENU_ITEM_MODE:
+        *out_min = 0;
+        *out_max = PLAY_MODE_COUNT - 1;
+        return &settings->mode;
     case MENU_ITEM_START_LEVEL:
         *out_min = 1;
         *out_max = SETTINGS_START_LEVEL_MAX;
@@ -221,8 +229,16 @@ void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t 
     out[0] = '\0';
 
     switch (item) {
+    case MENU_ITEM_MODE:
+        snprintf(out, size, "%s", play_mode_name((PlayMode)settings->mode));
+        break;
     case MENU_ITEM_START_LEVEL:
-        snprintf(out, size, "%d", settings->start_level);
+        /* Sprint and Ultra always start at level 1. */
+        if (settings->mode == PLAY_MARATHON) {
+            snprintf(out, size, "%d", settings->start_level);
+        } else {
+            snprintf(out, size, "-");
+        }
         break;
     case MENU_ITEM_VOLUME:
         if (settings->volume == 0) {
@@ -262,6 +278,9 @@ void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t 
 /* LEFT/RIGHT on a value row. Stops at the ends of the range. */
 static MenuCommand menu_change_value(MenuItem item, Settings *settings, int step)
 {
+    if (item == MENU_ITEM_START_LEVEL && settings->mode != PLAY_MARATHON) {
+        return MENU_COMMAND_NONE;
+    }
     int min = 0;
     int max = 0;
     int *value = menu_item_setting(item, settings, &min, &max);
@@ -285,6 +304,7 @@ static MenuCommand menu_select(Menu *menu, Settings *settings, MenuItem item)
         return MENU_COMMAND_START_GAME;
     case MENU_ITEM_HIGH_SCORES:
         menu_set_screen(menu, SCREEN_HIGH_SCORES);
+        menu->score_mode = settings->mode;
         return MENU_COMMAND_SCREEN_CHANGED;
     case MENU_ITEM_SETTINGS:
         menu->settings_parent = menu->screen;
@@ -356,7 +376,14 @@ MenuCommand menu_handle_key(Menu *menu, Settings *settings, MenuKey key)
     const MenuItem *items = NULL;
     const int count = menu_items(menu->screen, &items);
     if (count == 0) {
-        /* The title and the score table only wait for select or back. */
+        /* The score table switches modes; it and the title otherwise only
+           wait for select or back. */
+        if (menu->screen == SCREEN_HIGH_SCORES &&
+            (key == MENU_KEY_LEFT || key == MENU_KEY_RIGHT)) {
+            const int step = key == MENU_KEY_LEFT ? PLAY_MODE_COUNT - 1 : 1;
+            menu->score_mode = (menu->score_mode + step) % PLAY_MODE_COUNT;
+            return MENU_COMMAND_MOVED;
+        }
         if (key == MENU_KEY_SELECT) {
             if (menu->screen == SCREEN_TITLE) {
                 menu_set_screen(menu, SCREEN_MAIN_MENU);
@@ -400,6 +427,19 @@ MenuCommand menu_handle_key(Menu *menu, Settings *settings, MenuKey key)
     default:
         return MENU_COMMAND_NONE;
     }
+}
+
+void menu_format_ticks(uint64_t ticks, char *out, size_t size)
+{
+    if (size == 0) {
+        return;
+    }
+    /* Hundredths, rounded down: 60 ticks are 100 hundredths. */
+    const uint64_t hundredths = ticks * 100u / 60u;
+    const unsigned long long minutes = (unsigned long long)(hundredths / 6000u);
+    const unsigned seconds = (unsigned)(hundredths / 100u % 60u);
+    const unsigned fraction = (unsigned)(hundredths % 100u);
+    snprintf(out, size, "%llu:%02u.%02u", minutes, seconds, fraction);
 }
 
 MenuCommand menu_bind_key(Menu *menu, Settings *settings, int scancode)

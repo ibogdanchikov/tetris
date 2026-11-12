@@ -34,7 +34,9 @@ The game is split into a deterministic simulation and a presentation layer that 
 
 **Presentation reads state and never writes it.** The views take `const GameState *`. The effects layer has its own `Fx` state and its own splitmix64 generator, so particles cannot change the piece order. Pause is app state, not part of `GameState`.
 
-**Screens are a small state machine outside the game.** `src/app/menu.c` holds the current `Screen` (title, main menu, playing, paused, game over, settings, controls, high scores), the selected row and the key-binding prompt. It takes `MenuKey` values and returns a `MenuCommand` (start a run, resume, restart, drop the run, quit, a setting changed) that `main.c` carries out. It has no SDL and no game rules: `GameState.game_over` stays the rule result, and `main.c` switches to `SCREEN_GAME_OVER` when it sees it. Only `SCREEN_PLAYING` runs ticks; every other screen drops the accumulator and the input buffer each frame, so nothing pressed in a menu reaches the game.
+**Screens are a small state machine outside the game.** `src/app/menu.c` holds the current `Screen` (title, main menu, playing, paused, game over, settings, controls, high scores), the selected row and the key-binding prompt. It takes `MenuKey` values and returns a `MenuCommand` (start a run, resume, restart, drop the run, quit, a setting changed) that `main.c` carries out. It has no SDL and no game rules: `GameState.game_over` stays the rule result, and `main.c` switches to `SCREEN_GAME_OVER` when it sees it, records the run with `save_record_run` and points the menu's `score_mode` at the run's mode. Only `SCREEN_PLAYING` runs ticks; every other screen drops the accumulator and the input buffer each frame, so nothing pressed in a menu reaches the game.
+
+**Modes are goals in the core and names in the app.** `GameConfig` carries `line_goal`, `tick_limit` and `level_up`; `settings_game_config` in `src/app/save.c` maps the `PlayMode` setting to them (Marathon `{0, 0, true}`, Sprint `{40, 0, false}`, Ultra `{0, 7200, false}`). A run that reaches a goal ends with `GAME_OVER_LINE_GOAL` or `GAME_OVER_TIME_UP`; `game_over` still means only "ended", so the existing checks keep working, and `game_run_completed` tells a finished run from a lost one. `end_tick` records how many ticks the run lasted, counting the tick that ended it, so a Sprint time excludes pauses, stays fixed after the end and replays exactly. Each mode has its own `ScoreTable`; Sprint ranks by ticks, the others by score.
 
 **Settings live outside the core.** The core gets what a run needs through `GameConfig` (start level, DAS, ARR) and keeps DAS and ARR in `GameState`, so the rules never read a file and a state snapshot still replays. Volume goes to `audio_set_volume`, effects intensity to `fx_set_intensity`, and key bindings to `app_input_action`, which looks the scancode up in `Settings`.
 
@@ -78,7 +80,7 @@ The game is split into a deterministic simulation and a presentation layer that 
 | `tetris_audio` | `src/app/sound_map.c`, `src/audio/mix.c`, `src/audio/synth.c` | Event-to-sound mapping, voice mixing and synthesis. | `tetris_core` | SDL, allocation, libm |
 | `tetris_app` | `src/app/save.c`, `src/app/menu.c` | Settings, key bindings, the score table, the save text format and the screen state machine. | `tetris_core`, C standard headers (`stdio.h` for `snprintf`) | SDL, GL, file I/O, allocation |
 | `tetris` | `src/main.c`, `src/app/input_sdl.c`, `src/app/save_file.c`, `src/app/screenshot.c`, `src/audio/audio.c`, `src/platform/platform.c`, `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c`, `src/render/menu_view.c`, `src/render/renderer.c`, `src/render/shader.c`, `src/render/text.c`, generated `builtin_shaders.c` | Window, GL context, SDL audio, input mapping, the save file, rendering and the frame loop. | Everything above, `glad`, `SDL3::SDL3` | Nothing forbidden; this is the top layer |
-| `tetris_tests` | `tests/test_main.c`, `tests/test_piece.c`, `tests/test_game.c`, `tests/test_rules.c`, `tests/test_input_buffer.c`, `tests/test_font.c`, `tests/test_fx.c`, `tests/test_audio.c`, `tests/test_save.c`, `tests/test_scoring.c` | One assert-style test executable. | `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout`, `tetris_app` | SDL, GL |
+| `tetris_tests` | `tests/test_main.c`, `tests/test_piece.c`, `tests/test_game.c`, `tests/test_rules.c`, `tests/test_input_buffer.c`, `tests/test_font.c`, `tests/test_fx.c`, `tests/test_audio.c`, `tests/test_save.c`, `tests/test_scoring.c`, `tests/test_modes.c` | One assert-style test executable. | `tetris_core`, `tetris_fx`, `tetris_input`, `tetris_audio`, `tetris_view_layout`, `tetris_app` | SDL, GL |
 
 `src/render/text.c` is in the executable, not in `tetris_view_layout`, because it draws through `Renderer`. `src/render/board_view.c`, `src/render/fx_view.c`, `src/render/hud.c` and `src/render/menu_view.c` are also executable code: they need GL, even though their layout inputs are pure.
 
@@ -93,6 +95,8 @@ void game_init(GameState *game, uint64_t seed);
 void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level);
 void game_set_shift_timing(GameState *game, uint16_t das_ticks, uint16_t arr_ticks);
 void game_step(GameState *game, const GameInput *input);
+bool game_run_completed(const GameState *game);
+uint64_t game_run_ticks(const GameState *game);
 ```
 
 ```c
@@ -133,7 +137,8 @@ typedef struct GameInput {
 | `last_locked` | The piece as it was when `GAME_EVENT_LOCK` fired. |
 | `last_hard_drop_rows`, `last_hard_drop_from` | Set on the `GAME_EVENT_HARD_DROP` tick, before the drop. `rows` is the distance traveled and is 0 when the piece was already resting. |
 | `piece_serial` | Incremented on every spawn; renderers can use it to detect a new piece. |
-| `tick`, `events`, `game_over`, `game_over_reason` | `events` is cleared at the start of each tick and must be OR-ed across a multi-tick frame. |
+| `tick`, `events`, `game_over`, `game_over_reason` | `events` is cleared at the start of each tick and must be OR-ed across a multi-tick frame. `game_over_reason` is `GAME_OVER_LINE_GOAL` or `GAME_OVER_TIME_UP` for a finished run. |
+| `line_goal`, `tick_limit`, `level_up`, `end_tick` | The run's goals from `GameConfig`, and how many ticks the run lasted once it is over (`game_run_ticks` picks it or `tick`). The HUD shows a clock when either goal is set. |
 | `das_ticks`, `arr_ticks` | The run's shift timing, from `GameConfig`. |
 | `last_clear` | What the most recent lock scored: lines, T-spin kind, back-to-back, perfect clear, combo step and points. Set on every `GAME_EVENT_LOCK` tick. |
 | `back_to_back`, `clear_streak` | Scoring state across locks: whether the last line clear was a difficult one, and how many locks in a row cleared lines. |
@@ -159,7 +164,9 @@ uint32_t settings_actions_for_key(const Settings *settings, int scancode);
 bool settings_bind_key(Settings *settings, BindAction action, int slot, int scancode);
 bool save_parse(const char *text, size_t length, SaveData *out);
 size_t save_serialize(const SaveData *save, char *buffer, size_t capacity);
-int save_insert_score(SaveData *save, const HighScore *entry);
+GameConfig settings_game_config(const Settings *settings);
+int save_insert_score(SaveData *save, PlayMode mode, const HighScore *entry);
+int save_record_run(SaveData *save, PlayMode mode, const GameState *game, uint64_t seed);
 
 bool save_file_path(char *buffer, size_t size);
 void save_file_load(const char *path, SaveData *out);
@@ -170,7 +177,7 @@ MenuCommand menu_handle_key(Menu *menu, Settings *settings, MenuKey key);
 MenuCommand menu_bind_key(Menu *menu, Settings *settings, int scancode);
 ```
 
-`Settings` holds the volume, music and effects (0 to 10), bloom (0 or 1), DAS (1 to 30 ticks), ARR (0 to 10 ticks), the start level (1 to 15) and two key slots per `BindAction`. Keys are SDL scancodes stored as numbers; `save.h` names the ones it needs as USB HID usage IDs, and `input_sdl.c` checks each against `SDL_Scancode` with `_Static_assert`. Escape, P, M, R and F5 are reserved for the app and cannot be bound, and binding a key takes it out of every other slot. `save_parse` always leaves a valid `SaveData` and returns false only when the text is not a save file of a known version. `save_insert_score` keeps the table sorted, puts a tie below the earlier run, ignores a run that scored nothing, and returns the new place or -1.
+`Settings` holds the volume, music and effects (0 to 10), bloom (0 or 1), DAS (1 to 30 ticks), ARR (0 to 10 ticks), the start level (1 to 15), the `PlayMode` and two key slots per `BindAction`. Keys are SDL scancodes stored as numbers; `save.h` names the ones it needs as USB HID usage IDs, and `input_sdl.c` checks each against `SDL_Scancode` with `_Static_assert`. Escape, P, M, R and F5 are reserved for the app and cannot be bound, and binding a key takes it out of every other slot. `save_parse` always leaves a valid `SaveData` and returns false only when the text is not a save file of a known version. `save_insert_score` keeps a mode's table sorted (fewest ticks first for Sprint, most points first otherwise), puts a tie below the earlier run, ignores a run with nothing to rank by, and returns the new place or -1. `save_record_run` builds the entry a finished game makes in its mode (a lost Sprint makes none) and inserts it. Marathon runs are saved as `score=`, Sprint runs as `sprint=` and Ultra runs as `ultra=`, so a save from before the modes still loads, its scores as Marathon.
 
 `menu_handle_key` applies one menu key: up and down move the selection, left and right change a value row or the key slot, select acts on the row, back returns to the screen that opened the current one. `menu_bind_key` takes the key the controls screen is waiting for; Escape cancels it. `main.c` feeds both one SDL event at a time, so the Enter that opens the prompt is not taken as the key to bind.
 

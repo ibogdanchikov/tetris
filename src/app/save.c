@@ -23,6 +23,10 @@ static const char *const SAVE_KEY_NAMES[BIND_ACTION_COUNT] = {
     "left", "right", "soft_drop", "hard_drop", "rotate_cw", "rotate_ccw", "hold",
 };
 
+/* Mode names: lower case in the file, upper case on screen. */
+static const char *const SAVE_MODE_KEYS[PLAY_MODE_COUNT] = { "marathon", "sprint", "ultra" };
+static const char *const PLAY_MODE_NAMES[PLAY_MODE_COUNT] = { "MARATHON", "SPRINT", "ULTRA" };
+
 static const char *const SETTINGS_ACTION_NAMES[BIND_ACTION_COUNT] = {
     "LEFT", "RIGHT", "SOFT DROP", "HARD DROP", "ROTATE CW", "ROTATE CCW", "HOLD",
 };
@@ -96,6 +100,7 @@ void settings_clamp(Settings *settings)
     settings->arr_ticks = settings_clamp_int(settings->arr_ticks, 0, SETTINGS_ARR_MAX);
     settings->start_level =
         settings_clamp_int(settings->start_level, 1, SETTINGS_START_LEVEL_MAX);
+    settings->mode = settings_clamp_int(settings->mode, 0, PLAY_MODE_COUNT - 1);
 
     /* Drop keys that cannot be bound, then any key already used by an earlier
        slot, so one key never drives two actions. */
@@ -116,6 +121,33 @@ void settings_clamp(Settings *settings)
             }
         }
     }
+}
+
+const char *play_mode_name(PlayMode mode)
+{
+    return (unsigned)mode < (unsigned)PLAY_MODE_COUNT ? PLAY_MODE_NAMES[mode] : "";
+}
+
+GameConfig settings_game_config(const Settings *settings)
+{
+    GameConfig config = game_default_config();
+    config.das_ticks = (uint16_t)settings->das_ticks;
+    config.arr_ticks = (uint16_t)settings->arr_ticks;
+    switch (settings->mode) {
+    case PLAY_SPRINT:
+        config.line_goal = PLAY_SPRINT_LINES;
+        config.level_up = false;
+        break;
+    case PLAY_ULTRA:
+        config.tick_limit = PLAY_ULTRA_TICKS;
+        config.level_up = false;
+        break;
+    case PLAY_MARATHON:
+    default:
+        config.start_level = (uint32_t)settings->start_level;
+        break;
+    }
+    return config;
 }
 
 uint32_t settings_action_bit(BindAction action)
@@ -171,37 +203,72 @@ void settings_clear_key(Settings *settings, BindAction action, int slot)
 
 /* --- high scores --------------------------------------------------------- */
 
-bool save_score_qualifies(const SaveData *save, uint32_t score)
+/* True when a ranks strictly above b in the mode's table. */
+static bool save_ranks_above(PlayMode mode, const HighScore *a, const HighScore *b)
 {
-    if (score == 0) {
-        return false;
+    if (mode == PLAY_SPRINT) {
+        return a->ticks < b->ticks;
     }
-    if (save->score_count < SAVE_MAX_SCORES) {
-        return true;
-    }
-    return score > save->scores[SAVE_MAX_SCORES - 1].score;
+    return a->score > b->score;
 }
 
-int save_insert_score(SaveData *save, const HighScore *entry)
+bool save_score_qualifies(const SaveData *save, PlayMode mode, const HighScore *entry)
 {
-    if (!save_score_qualifies(save, entry->score)) {
+    if ((unsigned)mode >= (unsigned)PLAY_MODE_COUNT) {
+        return false;
+    }
+    if (mode == PLAY_SPRINT ? entry->ticks == 0 : entry->score == 0) {
+        return false;
+    }
+    const ScoreTable *table = &save->tables[mode];
+    if (table->count < SAVE_MAX_SCORES) {
+        return true;
+    }
+    return save_ranks_above(mode, entry, &table->entries[SAVE_MAX_SCORES - 1]);
+}
+
+int save_insert_score(SaveData *save, PlayMode mode, const HighScore *entry)
+{
+    if (!save_score_qualifies(save, mode, entry)) {
         return -1;
     }
+    ScoreTable *table = &save->tables[mode];
 
-    /* Below every entry with the same or a better score. */
+    /* Below every entry that ranks the same or better. */
     int place = 0;
-    while (place < save->score_count && save->scores[place].score >= entry->score) {
+    while (place < table->count && !save_ranks_above(mode, entry, &table->entries[place])) {
         ++place;
     }
 
-    const int count = save->score_count < SAVE_MAX_SCORES ? save->score_count + 1
-                                                          : SAVE_MAX_SCORES;
+    const int count = table->count < SAVE_MAX_SCORES ? table->count + 1 : SAVE_MAX_SCORES;
     for (int i = count - 1; i > place; --i) {
-        save->scores[i] = save->scores[i - 1];
+        table->entries[i] = table->entries[i - 1];
     }
-    save->scores[place] = *entry;
-    save->score_count = count;
+    table->entries[place] = *entry;
+    table->count = count;
     return place;
+}
+
+int save_record_run(SaveData *save, PlayMode mode, const GameState *game, uint64_t seed)
+{
+    HighScore entry = { 0, 1, game->lines_cleared, seed, 0 };
+    switch (mode) {
+    case PLAY_SPRINT:
+        if (game->game_over_reason != GAME_OVER_LINE_GOAL) {
+            return -1;
+        }
+        entry.ticks = game_run_ticks(game);
+        break;
+    case PLAY_ULTRA:
+        entry.score = game->score;
+        break;
+    case PLAY_MARATHON:
+    default:
+        entry.score = game->score;
+        entry.level = game->level;
+        break;
+    }
+    return save_insert_score(save, mode, &entry);
 }
 
 /* --- parsing ------------------------------------------------------------- */
@@ -295,25 +362,54 @@ static void save_parse_keys(const char *value, uint16_t keys[SETTINGS_KEYS_PER_A
     memcpy(keys, parsed, sizeof parsed);
 }
 
-/* "score level lines seed". A run that scored nothing or has no level is not
-   a run the game could have recorded, so the line is skipped. */
+/* Reads exactly `count` numbers and nothing else. */
+static bool save_read_numbers(const char *value, uint64_t *numbers, int count)
+{
+    const char *cursor = value;
+    for (int i = 0; i < count; ++i) {
+        if (!save_read_u64(&cursor, &numbers[i])) {
+            return false;
+        }
+    }
+    return save_at_end(cursor);
+}
+
+/* "score level lines seed", a Marathon run. A run that scored nothing or has
+   no level is not a run the game could have recorded, so the line is skipped. */
 static void save_parse_score(const char *value, SaveData *save)
 {
     uint64_t numbers[4];
-    const char *cursor = value;
-    for (int i = 0; i < 4; ++i) {
-        if (!save_read_u64(&cursor, &numbers[i])) {
-            return;
-        }
-    }
-    if (!save_at_end(cursor) || numbers[0] == 0 || numbers[0] > UINT32_MAX ||
+    if (!save_read_numbers(value, numbers, 4) || numbers[0] == 0 || numbers[0] > UINT32_MAX ||
         numbers[1] == 0 || numbers[1] > UINT32_MAX || numbers[2] > UINT32_MAX) {
         return;
     }
-
     const HighScore entry = { (uint32_t)numbers[0], (uint32_t)numbers[1],
-                              (uint32_t)numbers[2], numbers[3] };
-    (void)save_insert_score(save, &entry);
+                              (uint32_t)numbers[2], numbers[3], 0 };
+    (void)save_insert_score(save, PLAY_MARATHON, &entry);
+}
+
+/* "ticks lines seed", a Sprint run; no ticks is not a time. */
+static void save_parse_sprint(const char *value, SaveData *save)
+{
+    uint64_t numbers[3];
+    if (!save_read_numbers(value, numbers, 3) || numbers[0] == 0 || numbers[1] > UINT32_MAX) {
+        return;
+    }
+    const HighScore entry = { 0, 1, (uint32_t)numbers[1], numbers[2], numbers[0] };
+    (void)save_insert_score(save, PLAY_SPRINT, &entry);
+}
+
+/* "score lines seed", an Ultra run; it lasted the whole limit or less, but the
+   table ranks by score only, so the length is not kept. */
+static void save_parse_ultra(const char *value, SaveData *save)
+{
+    uint64_t numbers[3];
+    if (!save_read_numbers(value, numbers, 3) || numbers[0] == 0 || numbers[0] > UINT32_MAX ||
+        numbers[1] > UINT32_MAX) {
+        return;
+    }
+    const HighScore entry = { (uint32_t)numbers[0], 1, (uint32_t)numbers[1], numbers[2], 0 };
+    (void)save_insert_score(save, PLAY_ULTRA, &entry);
 }
 
 static void save_apply_line(const char *key, const char *value, SaveData *save)
@@ -334,8 +430,18 @@ static void save_apply_line(const char *key, const char *value, SaveData *save)
         (void)save_parse_int(value, &settings->arr_ticks);
     } else if (strcmp(key, "start_level") == 0) {
         (void)save_parse_int(value, &settings->start_level);
+    } else if (strcmp(key, "mode") == 0) {
+        for (int mode = 0; mode < PLAY_MODE_COUNT; ++mode) {
+            if (strcmp(value, SAVE_MODE_KEYS[mode]) == 0) {
+                settings->mode = mode;
+            }
+        }
     } else if (strcmp(key, "score") == 0) {
         save_parse_score(value, save);
+    } else if (strcmp(key, "sprint") == 0) {
+        save_parse_sprint(value, save);
+    } else if (strcmp(key, "ultra") == 0) {
+        save_parse_ultra(value, save);
     } else if (strncmp(key, "key.", 4) == 0) {
         for (int action = 0; action < BIND_ACTION_COUNT; ++action) {
             if (strcmp(key + 4, SAVE_KEY_NAMES[action]) == 0) {
@@ -450,10 +556,11 @@ size_t save_serialize(const SaveData *save, char *buffer, size_t capacity)
     char line[SAVE_MAX_LINE];
     int length = snprintf(line, sizeof line,
                           "%s\nversion=%d\nvolume=%d\nmusic=%d\neffects=%d\nbloom=%d\n"
-                          "das=%d\narr=%d\nstart_level=%d\n",
+                          "das=%d\narr=%d\nstart_level=%d\nmode=%s\n",
                           SAVE_MAGIC, SAVE_FORMAT_VERSION, settings.volume, settings.music,
                           settings.effects, settings.bloom, settings.das_ticks,
-                          settings.arr_ticks, settings.start_level);
+                          settings.arr_ticks, settings.start_level,
+                          SAVE_MODE_KEYS[settings.mode]);
     bool ok = save_append(buffer, capacity, &used, line, length);
 
     for (int action = 0; ok && action < BIND_ACTION_COUNT; ++action) {
@@ -461,12 +568,25 @@ size_t save_serialize(const SaveData *save, char *buffer, size_t capacity)
                           (unsigned)settings.keys[action][0], (unsigned)settings.keys[action][1]);
         ok = save_append(buffer, capacity, &used, line, length);
     }
-    for (int i = 0; ok && i < save->score_count && i < SAVE_MAX_SCORES; ++i) {
-        const HighScore *entry = &save->scores[i];
-        length = snprintf(line, sizeof line, "score=%lu %lu %lu %llu\n",
-                          (unsigned long)entry->score, (unsigned long)entry->level,
-                          (unsigned long)entry->lines, (unsigned long long)entry->seed);
-        ok = save_append(buffer, capacity, &used, line, length);
+    for (int mode = 0; ok && mode < PLAY_MODE_COUNT; ++mode) {
+        const ScoreTable *table = &save->tables[mode];
+        for (int i = 0; ok && i < table->count && i < SAVE_MAX_SCORES; ++i) {
+            const HighScore *entry = &table->entries[i];
+            if (mode == PLAY_SPRINT) {
+                length = snprintf(line, sizeof line, "sprint=%llu %lu %llu\n",
+                                  (unsigned long long)entry->ticks, (unsigned long)entry->lines,
+                                  (unsigned long long)entry->seed);
+            } else if (mode == PLAY_ULTRA) {
+                length = snprintf(line, sizeof line, "ultra=%lu %lu %llu\n",
+                                  (unsigned long)entry->score, (unsigned long)entry->lines,
+                                  (unsigned long long)entry->seed);
+            } else {
+                length = snprintf(line, sizeof line, "score=%lu %lu %lu %llu\n",
+                                  (unsigned long)entry->score, (unsigned long)entry->level,
+                                  (unsigned long)entry->lines, (unsigned long long)entry->seed);
+            }
+            ok = save_append(buffer, capacity, &used, line, length);
+        }
     }
 
     if (!ok) {

@@ -25,15 +25,19 @@ static bool settings_equal(const Settings *a, const Settings *b)
 
 static bool scores_equal(const SaveData *a, const SaveData *b)
 {
-    if (a->score_count != b->score_count) {
-        return false;
-    }
-    for (int i = 0; i < a->score_count; ++i) {
-        const HighScore *x = &a->scores[i];
-        const HighScore *y = &b->scores[i];
-        if (x->score != y->score || x->level != y->level || x->lines != y->lines ||
-            x->seed != y->seed) {
+    for (int mode = 0; mode < PLAY_MODE_COUNT; ++mode) {
+        const ScoreTable *ta = &a->tables[mode];
+        const ScoreTable *tb = &b->tables[mode];
+        if (ta->count != tb->count) {
             return false;
+        }
+        for (int i = 0; i < ta->count; ++i) {
+            const HighScore *x = &ta->entries[i];
+            const HighScore *y = &tb->entries[i];
+            if (x->score != y->score || x->level != y->level || x->lines != y->lines ||
+                x->seed != y->seed || x->ticks != y->ticks) {
+                return false;
+            }
         }
     }
     return true;
@@ -54,12 +58,12 @@ static void test_save_round_trip(void)
     settings_clear_key(&save.settings, BIND_ROTATE_CCW, 1);
 
     const HighScore runs[] = {
-        { 1200u, 3u, 25u, 1u },
-        { 4294967295u, 15u, 4000u, UINT64_MAX },
-        { 800u, 1u, 8u, 0x853c49e6748fea9bULL },
+        { 1200u, 3u, 25u, 1u, 0 },
+        { 4294967295u, 15u, 4000u, UINT64_MAX, 0 },
+        { 800u, 1u, 8u, 0x853c49e6748fea9bULL, 0 },
     };
     for (int i = 0; i < 3; ++i) {
-        CHECK(save_insert_score(&save, &runs[i]) >= 0);
+        CHECK(save_insert_score(&save, PLAY_MARATHON, &runs[i]) >= 0);
     }
 
     char text[SAVE_TEXT_CAPACITY];
@@ -72,8 +76,8 @@ static void test_save_round_trip(void)
     CHECK(save_parse(text, length, &loaded));
     CHECK(settings_equal(&loaded.settings, &save.settings));
     CHECK(scores_equal(&loaded, &save));
-    CHECK_EQ_INT(loaded.scores[0].score, 4294967295u);
-    CHECK(loaded.scores[0].seed == UINT64_MAX);
+    CHECK_EQ_INT(loaded.tables[PLAY_MARATHON].entries[0].score, 4294967295u);
+    CHECK(loaded.tables[PLAY_MARATHON].entries[0].seed == UINT64_MAX);
 }
 
 static void test_save_defaults_when_missing_or_corrupt(void)
@@ -84,7 +88,7 @@ static void test_save_defaults_when_missing_or_corrupt(void)
     SaveData loaded;
     CHECK(!save_parse(NULL, 0, &loaded));
     CHECK(settings_equal(&loaded.settings, &defaults.settings));
-    CHECK_EQ_INT(loaded.score_count, 0);
+    CHECK_EQ_INT(loaded.tables[PLAY_MARATHON].count, 0);
 
     CHECK(!save_parse_text("", &loaded));
     CHECK(settings_equal(&loaded.settings, &defaults.settings));
@@ -92,7 +96,7 @@ static void test_save_defaults_when_missing_or_corrupt(void)
     /* Wrong magic line: nothing else in the file is trusted. */
     CHECK(!save_parse_text("NOT A SAVE\nversion=1\nvolume=2\nscore=500 1 4 9\n", &loaded));
     CHECK(settings_equal(&loaded.settings, &defaults.settings));
-    CHECK_EQ_INT(loaded.score_count, 0);
+    CHECK_EQ_INT(loaded.tables[PLAY_MARATHON].count, 0);
 
     /* No version, or one this build does not know. */
     CHECK(!save_parse_text(SAVE_MAGIC "\nvolume=2\n", &loaded));
@@ -195,39 +199,39 @@ static void test_save_scores(void)
     }
     strcat(text, "score=0 1 0 1\nscore=99999 0 3 1\nscore=5 1 1\nscore=5 1 1 1 1\n");
     CHECK(save_parse_text(text, &loaded));
-    CHECK_EQ_INT(loaded.score_count, SAVE_MAX_SCORES);
-    CHECK_EQ_INT(loaded.scores[0].score, 1200);
-    CHECK_EQ_INT(loaded.scores[SAVE_MAX_SCORES - 1].score, 50);
-    for (int i = 1; i < loaded.score_count; ++i) {
-        CHECK(loaded.scores[i - 1].score >= loaded.scores[i].score);
+    CHECK_EQ_INT(loaded.tables[PLAY_MARATHON].count, SAVE_MAX_SCORES);
+    CHECK_EQ_INT(loaded.tables[PLAY_MARATHON].entries[0].score, 1200);
+    CHECK_EQ_INT(loaded.tables[PLAY_MARATHON].entries[SAVE_MAX_SCORES - 1].score, 50);
+    for (int i = 1; i < loaded.tables[PLAY_MARATHON].count; ++i) {
+        CHECK(loaded.tables[PLAY_MARATHON].entries[i - 1].score >= loaded.tables[PLAY_MARATHON].entries[i].score);
     }
 
     /* A tie goes below the run already in the table. */
     SaveData save;
     save_defaults(&save);
-    const HighScore first = { 500u, 1u, 5u, 1u };
-    const HighScore second = { 500u, 2u, 6u, 2u };
-    CHECK_EQ_INT(save_insert_score(&save, &first), 0);
-    CHECK_EQ_INT(save_insert_score(&save, &second), 1);
-    CHECK(save.scores[0].seed == 1u);
+    const HighScore first = { 500u, 1u, 5u, 1u, 0 };
+    const HighScore second = { 500u, 2u, 6u, 2u, 0 };
+    CHECK_EQ_INT(save_insert_score(&save, PLAY_MARATHON, &first), 0);
+    CHECK_EQ_INT(save_insert_score(&save, PLAY_MARATHON, &second), 1);
+    CHECK(save.tables[PLAY_MARATHON].entries[0].seed == 1u);
 
     /* A full table only takes a run that beats its last entry. */
     for (uint32_t i = 0; i < SAVE_MAX_SCORES; ++i) {
-        const HighScore entry = { 1000u + i, 1u, 0u, i };
-        CHECK(save_insert_score(&save, &entry) >= 0);
+        const HighScore entry = { 1000u + i, 1u, 0u, i, 0 };
+        CHECK(save_insert_score(&save, PLAY_MARATHON, &entry) >= 0);
     }
-    CHECK_EQ_INT(save.score_count, SAVE_MAX_SCORES);
-    const HighScore low = { 1000u, 1u, 0u, 99u };
-    CHECK(!save_score_qualifies(&save, 1000u));
-    CHECK_EQ_INT(save_insert_score(&save, &low), -1);
-    const HighScore best = { 5000u, 9u, 90u, 42u };
-    CHECK_EQ_INT(save_insert_score(&save, &best), 0);
-    CHECK_EQ_INT(save.scores[SAVE_MAX_SCORES - 1].score, 1001);
+    CHECK_EQ_INT(save.tables[PLAY_MARATHON].count, SAVE_MAX_SCORES);
+    const HighScore low = { 1000u, 1u, 0u, 99u, 0 };
+    CHECK(!save_score_qualifies(&save, PLAY_MARATHON, &low));
+    CHECK_EQ_INT(save_insert_score(&save, PLAY_MARATHON, &low), -1);
+    const HighScore best = { 5000u, 9u, 90u, 42u, 0 };
+    CHECK_EQ_INT(save_insert_score(&save, PLAY_MARATHON, &best), 0);
+    CHECK_EQ_INT(save.tables[PLAY_MARATHON].entries[SAVE_MAX_SCORES - 1].score, 1001);
 
-    const HighScore nothing = { 0u, 1u, 0u, 0u };
+    const HighScore nothing = { 0u, 1u, 0u, 0u, 0 };
     save_defaults(&save);
-    CHECK_EQ_INT(save_insert_score(&save, &nothing), -1);
-    CHECK_EQ_INT(save.score_count, 0);
+    CHECK_EQ_INT(save_insert_score(&save, PLAY_MARATHON, &nothing), -1);
+    CHECK_EQ_INT(save.tables[PLAY_MARATHON].count, 0);
 }
 
 static void test_save_serialize_limits(void)
@@ -235,8 +239,8 @@ static void test_save_serialize_limits(void)
     SaveData save;
     save_defaults(&save);
     for (uint32_t i = 0; i < SAVE_MAX_SCORES; ++i) {
-        const HighScore entry = { 4000000000u - i, 4000000000u, 4000000000u, UINT64_MAX };
-        (void)save_insert_score(&save, &entry);
+        const HighScore entry = { 4000000000u - i, 4000000000u, 4000000000u, UINT64_MAX, 0 };
+        (void)save_insert_score(&save, PLAY_MARATHON, &entry);
     }
 
     /* The worst case fits the documented capacity, and a buffer that is too

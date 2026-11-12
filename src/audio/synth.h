@@ -33,6 +33,7 @@ typedef enum SoundId {
     SOUND_LEVEL_UP,
     SOUND_GAME_OVER,
     SOUND_PAUSE, /* one soft blip, used for pause and resume */
+    SOUND_FINISH, /* a rising fanfare for a finished Sprint or Ultra */
     SOUND_COUNT
 } SoundId;
 

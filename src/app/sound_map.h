@@ -19,7 +19,9 @@
  *  - a hard drop always locks in the same tick, so the thud replaces the lock
  *    click and is played before the clear sound when both happen,
  *  - game over suppresses the lock and clear sounds: the phrase is the point,
- *    and a lock-out tick would otherwise stack two sounds on top of it,
+ *    and a lock-out tick would otherwise stack two sounds on top of it; a run
+ *    that reached its goal (game_run_completed) plays SOUND_FINISH instead of
+ *    the game-over phrase,
  *  - level up, move, rotate and hold are added on top, because they can
  *    genuinely happen alongside a drop or a lock.
  */

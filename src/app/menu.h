@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "app/save.h"
 
@@ -60,6 +61,7 @@ typedef enum MenuCommand {
 /* One row of a menu screen. */
 typedef enum MenuItem {
     MENU_ITEM_START = 0,
+    MENU_ITEM_MODE,
     MENU_ITEM_START_LEVEL,
     MENU_ITEM_HIGH_SCORES,
     MENU_ITEM_SETTINGS,
@@ -90,6 +92,8 @@ typedef struct Menu {
     int column;             /* key slot on the controls screen, 0 or 1 */
     bool waiting_for_key;   /* the controls screen is waiting for a key to bind */
     int last_rank;          /* place of the run that just ended, -1 if none */
+    int last_mode;          /* PlayMode of that run, whose table last_rank is in */
+    int score_mode;         /* PlayMode whose table the high-score screen shows */
 } Menu;
 
 /* Starts on the title screen. */
@@ -99,10 +103,13 @@ void menu_init(Menu *menu);
 void menu_set_screen(Menu *menu, Screen screen);
 
 /*
- * Applies one menu key on the current screen. Value rows (volume, music,
- * effects, bloom, DAS, ARR, start level) change with LEFT and RIGHT and report
- * MENU_COMMAND_SETTINGS_CHANGED. PLAYING ignores every key; the app handles
- * the game keys itself. Call menu_bind_key instead while waiting_for_key.
+ * Applies one menu key on the current screen. Value rows (mode, start level,
+ * volume, music, effects, bloom, DAS, ARR) change with LEFT and RIGHT and
+ * report MENU_COMMAND_SETTINGS_CHANGED; the start level only in Marathon,
+ * since the other modes always start at level 1. On the high-score screen LEFT
+ * and RIGHT switch between the modes' tables; it opens on the selected mode.
+ * PLAYING ignores every key; the app handles the game keys itself. Call
+ * menu_bind_key instead while waiting_for_key.
  */
 MenuCommand menu_handle_key(Menu *menu, Settings *settings, MenuKey key);
 
@@ -133,3 +140,6 @@ void menu_item_value(MenuItem item, const Settings *settings, char *out, size_t 
 
 /* The action a controls row binds, or -1 for the other rows. */
 int menu_item_bind_action(MenuItem item);
+
+/* A run time from ticks (60 per second) as "M:SS.CC", for example "1:23.45". */
+void menu_format_ticks(uint64_t ticks, char *out, size_t size);

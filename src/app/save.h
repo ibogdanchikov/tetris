@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/game.h"
+
 /*
  * Settings, key bindings and the top ten scores, plus the text format they are
  * saved in. Deliberately free of SDL and of file I/O, so the tests can run the
@@ -21,26 +23,49 @@
  *     das=10
  *     arr=2
  *     start_level=1
+ *     mode=sprint
  *     key.left=80 0
  *     ...
  *     score=12345 3 25 9600400441103183515
+ *     sprint=5832 40 9600400441103183516
+ *     ultra=48210 61 9600400441103183517
  *
  * The first line is the magic line and must match exactly. Then come key=value
  * lines in any order. Empty lines and lines starting with '#' are skipped,
  * unknown keys and malformed values are ignored, numbers out of range are
- * clamped, and a score line is "score level lines seed". A missing magic line or
- * a missing or unknown version makes the whole file count as corrupt, and the
- * defaults are used instead.
+ * clamped. A Marathon run is "score=score level lines seed", a Sprint run
+ * "sprint=ticks lines seed" and an Ultra run "ultra=score lines seed". A missing
+ * magic line or a missing or unknown version makes the whole file count as
+ * corrupt, and the defaults are used instead.
+ *
+ * New keys do not change the version: a build that does not know a key skips
+ * it. The Sprint and Ultra tables and the mode were added that way, so a save
+ * from before them loads with its scores as Marathon.
  */
 
 #define SAVE_MAGIC "TETRIS SAVE"
 #define SAVE_FORMAT_VERSION 1
 
-/* How many runs the high-score table keeps. */
+/* How many runs each high-score table keeps. */
 #define SAVE_MAX_SCORES 10
 
-/* Enough for every setting, every binding and ten scores with 64-bit seeds. */
+/* Enough for every setting, every binding and three full tables with 64-bit seeds. */
 #define SAVE_TEXT_CAPACITY 4096
+
+/*
+ * The ways to play. Marathon is the endless game; Sprint is
+ * PLAY_SPRINT_LINES lines against the clock; Ultra is PLAY_ULTRA_TICKS of
+ * play for score. Sprint and Ultra stay at level 1.
+ */
+typedef enum PlayMode {
+    PLAY_MARATHON = 0,
+    PLAY_SPRINT,
+    PLAY_ULTRA,
+    PLAY_MODE_COUNT
+} PlayMode;
+
+#define PLAY_SPRINT_LINES 40
+#define PLAY_ULTRA_TICKS 7200 /* two minutes at 60 ticks per second */
 
 /* Ranges the settings are clamped to. */
 #define SETTINGS_VOLUME_MAX 10 /* 0 = silent, 10 = the full mix */
@@ -100,29 +125,50 @@ typedef struct Settings {
     int bloom;       /* 0 = off, 1 = on */
     int das_ticks;   /* SETTINGS_DAS_MIN..SETTINGS_DAS_MAX */
     int arr_ticks;   /* 0..SETTINGS_ARR_MAX */
-    int start_level; /* 1..SETTINGS_START_LEVEL_MAX */
+    int start_level; /* 1..SETTINGS_START_LEVEL_MAX, Marathon only */
+    int mode;        /* PlayMode */
     uint16_t keys[BIND_ACTION_COUNT][SETTINGS_KEYS_PER_ACTION];
 } Settings;
 
-/* One finished run. The seed is kept so a run can be told apart and replayed. */
+/*
+ * One finished run. The seed is kept so a run can be told apart and replayed.
+ * Sprint ranks by ticks, the others by score; a Sprint entry has no score and
+ * level 1, an Ultra entry level 1.
+ */
 typedef struct HighScore {
     uint32_t score;
     uint32_t level;
     uint32_t lines;
     uint64_t seed;
+    uint64_t ticks; /* how long the run lasted; what a Sprint is ranked by */
 } HighScore;
+
+/* The best runs of one mode, best first. */
+typedef struct ScoreTable {
+    HighScore entries[SAVE_MAX_SCORES];
+    int count;
+} ScoreTable;
 
 typedef struct SaveData {
     Settings settings;
-    HighScore scores[SAVE_MAX_SCORES]; /* best first */
-    int score_count;
+    ScoreTable tables[PLAY_MODE_COUNT]; /* indexed by PlayMode */
 } SaveData;
 
+/* Upper-case name of a mode for the menus, for example "SPRINT". */
+const char *play_mode_name(PlayMode mode);
+
+/*
+ * The core's config for a run with these settings: the shift timing, and the
+ * mode's goals. Marathon starts at the start level and levels up; Sprint ends
+ * at PLAY_SPRINT_LINES lines and Ultra after PLAY_ULTRA_TICKS, both at level 1.
+ */
+GameConfig settings_game_config(const Settings *settings);
+
 /* Full volume and effects, music at SETTINGS_MUSIC_DEFAULT, bloom on, the
-   core's DAS and ARR, level 1 and the default keys. */
+   core's DAS and ARR, Marathon at level 1 and the default keys. */
 void settings_defaults(Settings *settings);
 
-/* Default settings and an empty score table. */
+/* Default settings and empty score tables. */
 void save_defaults(SaveData *save);
 
 /* Clamps every value into its range and empties key slots that hold a
@@ -172,14 +218,24 @@ bool save_parse(const char *text, size_t length, SaveData *out);
 size_t save_serialize(const SaveData *save, char *buffer, size_t capacity);
 
 /*
- * True when a run with this score would enter the table. A run that scored
- * nothing never does.
+ * True when the run would enter its mode's table. Sprint ranks by fewer ticks,
+ * Marathon and Ultra by more score. A run with nothing to rank by (no ticks in
+ * Sprint, no score otherwise) never enters.
  */
-bool save_score_qualifies(const SaveData *save, uint32_t score);
+bool save_score_qualifies(const SaveData *save, PlayMode mode, const HighScore *entry);
 
 /*
- * Adds a run to the table, best first. A run that ties an entry already in the
- * table goes below it, so the earlier run keeps its place. Returns the new
- * entry's place (0 = best), or -1 when it did not make the table.
+ * Adds a run to its mode's table, best first. A run that ties an entry already
+ * in the table goes below it, so the earlier run keeps its place. Returns the
+ * new entry's place (0 = best), or -1 when it did not make the table.
  */
-int save_insert_score(SaveData *save, const HighScore *entry);
+int save_insert_score(SaveData *save, PlayMode mode, const HighScore *entry);
+
+/*
+ * Records a run that has ended in its mode's table and returns its place, or
+ * -1. A Sprint that did not reach its line goal is lost and records nothing; a
+ * Marathon or an Ultra counts however it ended. The entry keeps what the save
+ * file keeps for the mode: score, level and lines for Marathon; the run's
+ * ticks and lines for Sprint; score and lines for Ultra.
+ */
+int save_record_run(SaveData *save, PlayMode mode, const GameState *game, uint64_t seed);

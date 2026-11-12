@@ -483,6 +483,7 @@ int main(void)
     test_audio_suite();
     test_save_suite();
     test_scoring_suite();
+    test_modes_suite();
 
     if (test_failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", test_failures);

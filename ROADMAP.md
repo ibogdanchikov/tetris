@@ -91,6 +91,16 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - `text_draw` takes float sizes and draws from the atlas, falling back to the pixel font when there is none. The menus fit their text with fractional sizes, which made the controls screen's rows larger at 800x600.
 - This takes neither of the routes the design note suggested (a checked-in atlas or a vendored TrueType rasterizer): the strokes live in the source, so there is no file to download or license to check, and the tubes match the neon look.
 
+### Milestone 8: "Add Sprint and Ultra game modes"
+
+- `GameConfig` gets `line_goal`, `tick_limit` and `level_up`, and `GameOverReason` gets `GAME_OVER_LINE_GOAL` and `GAME_OVER_TIME_UP`. Sprint ends on the lock that reaches 40 lines, with its full rows removed at once; Ultra ends on the step that brings `tick` to 7200, whatever the phase. Both stay at level 1. `end_tick` keeps the run's length after the end, and `game_run_completed` tells a finished run from a lost one.
+- A `PlayMode` setting and `settings_game_config` in the save module map Marathon, Sprint and Ultra to those goals; a **MODE** row on the main menu picks it, and the **LEVEL** row is Marathon only.
+- The HUD shows SCORE, TIME (up in Sprint, down in Ultra) and the lines TO GO or LINES in place of LEVEL, and lets long values shrink to fractional sizes so a time stays readable at 352x352.
+- Results screens: `CLEAR!` with the time, `TIME UP` with the score, `GAME OVER` after a top-out, with `NEW BEST TIME!` or `NEW HIGH SCORE!` or the place. A finished run plays a new `SOUND_FINISH` fanfare.
+- One top-ten `ScoreTable` per mode, Sprint ranked by ticks; the score screen switches modes with LEFT and RIGHT. `save_record_run` decides what a run records: nothing for a lost Sprint, the score for an Ultra that topped out. New `sprint=`, `ultra=` and `mode=` keys, no version bump, so a 0.5.0 save loads with its scores as Marathon.
+- `tests/test_modes.c` covers the line goal, the tick limit, the fixed level, a Sprint replay, the mode configs, Sprint ranking, recording, the save keys, an old save file and the time format.
+- One change from the plan: Ultra is checked at the end of the step that reaches the limit, not at the start of the next one, so the run is exactly 7200 ticks of play and the end shows on the same frame.
+
 ## Current status
 
 ### What works
@@ -104,6 +114,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Smooth vector text at any size, with the pixel font as a fallback.
 - Line-clear delay with DAS charging through it, and game over by block out or lock out.
 - HUD with hold, next, score, level and lines; pause, resume and restart; focus loss pauses.
+- Three modes: Marathon, Sprint (40 lines) and Ultra (two minutes), each with its own top ten.
 - A title screen, a main menu with a start-level picker, pause and game-over menus, a top-ten score table, and settings for volume, effects intensity, DAS, ARR and the key bindings. Settings and scores survive a restart in `save.txt` in SDL's preference directory.
 - A neon arcade look: glass blocks lit from inside with a sweeping sheen and random sparkles, a hologram ghost with a beam of light down to it, a glow around the active piece, neon tube frames and glowing text. Also the clear animation, particles, trails, shake, background shader and F5 reload.
 - Synthesized sound for moves, rotation, hold, hard drop, lock, line clears, level up, game over and pause. `M` mutes; `--mute` starts muted.
@@ -126,6 +137,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Sparks and rings in a real game. They were drawn from a scratch build that fed a hard drop and a perfect four-line clear into the fx layer and captured them at about 30, 60, 100 and 175 ms; the first sparks were too faint and were made larger and brighter after that.
 - The row drop at full speed in a real game. Its offsets were checked with a throwaway program (clears of rows 0-1, 2, 1 and 3, and 0-3, plus a lock in the same frame) and drawn from a scratch build pinned at the start, middle and end of the fall, but not watched in motion.
 - The stroke font was captured on the title, main menu, settings, controls and HUD screens (with a seven-line clear label) at 352x352, 800x600 and 1600x1000, and the pixel-font fallback with an old `quad.frag` that has no glyph style. A throwaway program checked that every pixel-font character has a stroke glyph and that no atlas cell bleeds into its neighbors (the glow spread was cut from 1.5 to 1.4 units after the first run found 2956 non-zero border texels). At 352x352 the clear label is at about one pixel per unit and soft, but readable.
+- A real Sprint or Ultra by a person. The rules are unit tested; the screens were captured from a scratch build that forced a finished Sprint (1:37.20) and a finished Ultra (48210) through the app's own finish path, with seeded save files: the mode row, both HUDs at 800x600 and 352x352, both results screens and the Sprint table with the new run highlighted, and the save file after it. Three rules were broken on purpose (the goal only on an exact hit, Sprint ranked by score, a lost Sprint recorded) and the suite caught each. The first Docker build caught a test that compared `HighScore` with `memcmp`, padding included; it compares fields now.
 - Interactive keyboard play by a person. The input path is covered by unit tests, and the menus were driven with synthetic SDL events, but nobody has played through the menus by hand here.
 - How the sounds and the music actually sound. The device opened and the synth output is tested for length, peak, finite samples, click-free ends and determinism; nobody has listened to the mix here. The music was checked by analysis instead: a throwaway program measured a seam step of 0.00005 against 0.064 for the largest step inside the loop, a peak of 0.51, no DC offset and even loudness across the eight bars, and an ffmpeg spectrogram showed the melody, arpeggio, bass and drums where they were written. The seam test was checked against a render that cut the notes at the end, which it fails. The sanitizer build ran 240 frames with the music mixing through SDL's dummy audio driver without a report. Its level against the effects (`AUDIO_MUSIC_GAIN` 0.5, MUSIC 7 by default) is a guess until someone listens.
 - Windows and macOS builds.
@@ -144,7 +156,8 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 - Visual tuning is compile-time apart from the effects-intensity setting, which scales everything at once. The trail and particle alphas are private constants in `src/render/fx_view.c` (`FX_VIEW_TRAIL_ALPHA`, `FX_VIEW_TRAIL_WIDE_ALPHA`, `FX_VIEW_PARTICLE_ALPHA`), and the shake amounts are in `src/fx/fx.h`. Particle counts round per cell, so the lock dust (two per cell) is gone below effects 3.
 - `--seed` is parsed as a non-negative `long` with a maximum of 2147483647, while the core and `RNG_DEFAULT_SEED` use `uint64_t`. The default 64-bit seed cannot be passed back in full on the command line.
 - `--play` starts at the saved start level; there is no flag for the level itself.
-- The HUD still picks whole-pixel text sizes (`board_layout_fit_text_pixel`); only the menus fit fractional ones.
+- The HUD labels still use whole-pixel sizes; the values and the menus fit fractional ones.
+- No countdown before a Sprint or an Ultra: the clock starts with the first piece.
 - `platform_set_title` is declared and implemented but no longer called; the window title is set once in `platform_init`.
 - The loop has no frame limiter of its own. It relies on vsync through `SDL_GL_SetSwapInterval(1)` and only logs a warning when the driver refuses it, so an uncapped driver would spin the loop.
 - The move-sound throttle lives in `main.c` (`APP_MOVE_SOUND_TICKS`) rather than in `sound_map`, so the mapping is not fully described by the SDL-free module.
@@ -153,41 +166,7 @@ The repository itself starts at `99b8f10` "Initialize Tetris project", which onl
 
 ## Planned milestones
 
-### Milestone 8: game modes
-
-**Goal:** add two timed modes next to the endless game: Sprint (clear 40 lines as fast as possible) and Ultra (score as much as possible in two minutes), each with its own top-ten table.
-
-**Scope**
-
-- Three modes: Marathon (the current endless game, unchanged), Sprint and Ultra.
-- A goal in the core: a line goal and a tick limit in `GameConfig`, and two new end reasons for reaching them.
-- A **MODE** row on the main menu, saved with the settings.
-- A HUD for each mode: Sprint shows the elapsed time and the lines left, Ultra the time left.
-- A results screen for a finished Sprint or Ultra, and a finish sound.
-- A top-ten table per mode, kept in the same save file.
-
-**Design notes**
-
-- The core knows goals, not mode names. `GameConfig` gets `line_goal` (0 = none), `tick_limit` (0 = none) and `level_up` (whether the level rises every ten lines). Marathon is `{0, 0, true}`, Sprint `{40, 0, false}` and Ultra `{0, 7200, false}`. The app maps a mode to a config; the rules stay free of menus and names.
-- `GameOverReason` gets `GAME_OVER_LINE_GOAL` and `GAME_OVER_TIME_UP`. `game_over` keeps meaning "the run has ended", so every check of it in the app, the views and the sound map keeps working; the reason says whether the run was finished or lost. `GAME_EVENT_GAME_OVER` fires for all four.
-- Sprint ends on the lock tick that brings `lines_cleared` to `line_goal` or past it (a four-line clear from 38 finishes too). The full rows are removed at once, the way a lock out removes them, and there is no clear delay. The time is `game.tick` at that moment, so it counts every step of the run and none of the pause, and a replay gives the same time to the tick.
-- Ultra ends when `game.tick` reaches `tick_limit`, checked at the start of `game_step`, whatever the phase. A piece in the air scores nothing; a line clear already scored at its lock keeps its points, even if the clear delay is still running.
-- A top-out in Sprint is a lost run: it shows the game-over screen and records nothing. A top-out in Ultra ends the run early, but the score counts: Ultra is a score attack, and a top-out is its own penalty.
-- Sprint and Ultra start at level 1 and never level up, so runs are comparable; the start-level picker is for Marathon only. In those modes the main menu's **LEVEL** row reads `-` and ignores LEFT and RIGHT.
-- Time is shown as `M:SS.CC` from ticks (`ticks * 100 / 60` hundredths). The font has `:` and `.`, so no new glyphs are needed. In Sprint and Ultra the HUD replaces **LEVEL**, which never changes there, with **TIME**.
-- Results: a finished Sprint shows `CLEAR!` with the time and its place; Ultra shows `TIME UP` with the score and its place; Marathon and a lost Sprint keep `GAME OVER`. A finished run plays a new `SOUND_FINISH` fanfare instead of the game-over phrase, picked by `sound_map` from the end reason.
-- Scores: `HighScore` gets `ticks`. Marathon and Ultra rank by score (highest first), Sprint by ticks (lowest first); ties keep the earlier run on top, as now. The **HIGH SCORES** screen shows one mode at a time, LEFT and RIGHT switch, and it opens on the mode just played.
-- The save file needs no version bump. `score=` keeps meaning a Marathon run, and the new modes get new keys, `sprint=ticks lines seed` and `ultra=score lines seed`, so a 0.5.0 save loads in the new build with its scores as Marathon. A 0.5.0 build skips keys it does not know, so going back to it keeps working but drops the Sprint and Ultra tables on its next save, which is acceptable. `mode=marathon|sprint|ultra` is a new settings key on the same terms.
-- Not in this milestone: a countdown before the start, more modes (Zen, 20G, custom goals), splits or ghost comparisons, and replays. A countdown would move the start of the timer, and that is a separate decision.
-
-**Done when**
-
-- The main menu picks Marathon, Sprint or Ultra, and the choice survives a restart.
-- Sprint ends on the lock that reaches 40 lines with the exact time; Ultra ends at 2:00.00 with its score; both show their result and place, and the finish sound plays.
-- A Sprint top-out records nothing; an Ultra top-out records its score.
-- Each mode has its own top ten, saved and loaded; a save file from 0.5.0 loads with its scores as Marathon.
-- The HUD shows the mode's time and goal, and fits at 352x352.
-- Tests cover the line goal (including a clear that passes it), the tick limit at its exact tick, the fixed level, the new end reasons, Sprint ranking by time, the new save keys and an old save file, and a replay of a Sprint run giving the same time.
+None. Milestone 8 was the last planned one; the next step comes from the list below.
 
 ## Later / ideas
 

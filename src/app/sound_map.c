@@ -87,7 +87,10 @@ int sound_map_events(uint32_t events, const GameState *game, SoundRequest out[],
         sound_map_push(&mapper, SOUND_LEVEL_UP, SOUND_GAIN_LEVEL_UP);
     }
     if (game_over) {
-        sound_map_push(&mapper, SOUND_GAME_OVER, SOUND_GAIN_GAME_OVER);
+        /* A run that reached its goal gets the fanfare, not the lament. */
+        const bool finished = game != NULL && game_run_completed(game);
+        sound_map_push(&mapper, finished ? SOUND_FINISH : SOUND_GAME_OVER,
+                       SOUND_GAIN_GAME_OVER);
     }
 
     if ((events & GAME_EVENT_MOVE) != 0) {

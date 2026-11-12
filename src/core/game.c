@@ -409,6 +409,19 @@ static void game_step_shift_charge(GameState *game, const GameInput *input)
     }
 }
 
+/*
+ * Ends the run from inside a step. The step in progress counts as played, so
+ * end_tick is one past the current tick, the value tick will have once the
+ * step has finished.
+ */
+static void game_end(GameState *game, GameOverReason reason)
+{
+    game->game_over = true;
+    game->game_over_reason = reason;
+    game->events |= GAME_EVENT_GAME_OVER;
+    game->end_tick = game->tick + 1u;
+}
+
 /* A corner counts when it is filled or outside the board, walls and floor included. */
 static bool game_corner_blocked(const Board *board, int x, int y)
 {
@@ -575,10 +588,21 @@ static void game_lock_piece(GameState *game)
         game->events |= GAME_EVENT_LINE_CLEAR;
         game->lines_cleared += (uint32_t)cleared;
         const uint32_t level = game->start_level + game->lines_cleared / 10u;
-        if (level > game->level) {
+        if (game->level_up && level > game->level) {
             game->level = level;
             game->events |= GAME_EVENT_LEVEL_UP;
         }
+    }
+
+    /*
+     * Reaching the line goal finishes the run on this lock, ahead of a lock
+     * out: a finished run is not lost on a technicality. Like a lock out it
+     * removes the full rows at once, since no piece follows them.
+     */
+    if (game->line_goal > 0 && game->lines_cleared >= game->line_goal) {
+        (void)board_clear_full_rows(&game->board);
+        game_end(game, GAME_OVER_LINE_GOAL);
+        return;
     }
 
     /*
@@ -589,9 +613,7 @@ static void game_lock_piece(GameState *game)
      */
     if (all_hidden) {
         (void)board_clear_full_rows(&game->board);
-        game->game_over = true;
-        game->game_over_reason = GAME_OVER_LOCK_OUT;
-        game->events |= GAME_EVENT_GAME_OVER;
+        game_end(game, GAME_OVER_LOCK_OUT);
         return;
     }
 
@@ -649,9 +671,7 @@ static void game_place_spawned(GameState *game, PieceType type)
     game->events |= GAME_EVENT_SPAWN;
 
     if (!game_piece_fits(&game->board, &game->piece)) {
-        game->game_over = true;
-        game->game_over_reason = GAME_OVER_BLOCK_OUT;
-        game->events |= GAME_EVENT_GAME_OVER;
+        game_end(game, GAME_OVER_BLOCK_OUT);
         return;
     }
 
@@ -709,7 +729,7 @@ static void game_step_hold(GameState *game)
 
 GameConfig game_default_config(void)
 {
-    const GameConfig config = { 1, GAME_DAS_TICKS, GAME_ARR_TICKS };
+    const GameConfig config = { 1, GAME_DAS_TICKS, GAME_ARR_TICKS, 0, 0, true };
     return config;
 }
 
@@ -724,6 +744,9 @@ void game_init_with_config(GameState *game, uint64_t seed, const GameConfig *con
     game->level = game->start_level;
     game->das_ticks = config->das_ticks;
     game->arr_ticks = config->arr_ticks;
+    game->line_goal = config->line_goal;
+    game->tick_limit = config->tick_limit;
+    game->level_up = config->level_up;
     for (int i = 0; i < GAME_NEXT_COUNT; ++i) {
         game->next_queue[i] = bag_next(&game->bag, &game->rng_state);
     }
@@ -826,7 +849,19 @@ static void game_step_line_clear(GameState *game, const GameInput *input)
     game->shift_counter = shift_counter;
 }
 
-void game_step(GameState *game, const GameInput *input)
+bool game_run_completed(const GameState *game)
+{
+    return game->game_over && (game->game_over_reason == GAME_OVER_LINE_GOAL ||
+                               game->game_over_reason == GAME_OVER_TIME_UP);
+}
+
+uint64_t game_run_ticks(const GameState *game)
+{
+    return game->game_over ? game->end_tick : game->tick;
+}
+
+/* One tick of the rules; game_step adds the tick limit around it. */
+static void game_step_tick(GameState *game, const GameInput *input)
 {
     game->events = 0;
 
@@ -924,4 +959,20 @@ void game_step(GameState *game, const GameInput *input)
 
     /* (8) one tick has elapsed. */
     ++game->tick;
+}
+
+void game_step(GameState *game, const GameInput *input)
+{
+    const bool running = !game->game_over;
+    game_step_tick(game, input);
+
+    /* The tick limit ends the run on the step that reaches it, whatever the
+       phase; tick has already counted that step. */
+    if (running && !game->game_over && game->tick_limit > 0 &&
+        game->tick >= game->tick_limit) {
+        game->game_over = true;
+        game->game_over_reason = GAME_OVER_TIME_UP;
+        game->events |= GAME_EVENT_GAME_OVER;
+        game->end_tick = game->tick;
+    }
 }

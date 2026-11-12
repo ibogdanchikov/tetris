@@ -47,11 +47,17 @@
 /* Highest level with its own gravity entry; above that the level 20 value is used. */
 #define GAME_MAX_GRAVITY_LEVEL 20
 
-/* Why the run ended. GAME_OVER_NONE means the game is still running. */
+/*
+ * Why the run ended. GAME_OVER_NONE means the game is still running. The first
+ * two lose the run; the last two finish it by reaching a goal from GameConfig
+ * (see game_run_completed).
+ */
 typedef enum GameOverReason {
     GAME_OVER_NONE = 0,
     GAME_OVER_BLOCK_OUT, /* the new piece could not spawn */
     GAME_OVER_LOCK_OUT,  /* a piece locked with every cell in the hidden rows */
+    GAME_OVER_LINE_GOAL, /* lines_cleared reached the line goal */
+    GAME_OVER_TIME_UP,   /* the run used up its tick limit */
 } GameOverReason;
 
 /*
@@ -197,6 +203,15 @@ typedef struct GameState {
     uint16_t clear_streak;
     GameClearResult last_clear;
 
+    /* The run's goals, from GameConfig; 0 means none. */
+    uint32_t line_goal;
+    uint32_t tick_limit;
+    bool level_up; /* the level rises every ten lines */
+
+    /* Ticks the run lasted, counting the tick that ended it; 0 while it runs.
+       Later game_step calls still advance tick, never this. */
+    uint64_t end_tick;
+
     /*
      * Where the tick is: falling or counting out a line clear. While clearing
      * there is no active piece, so the piece fields hold the last locked piece
@@ -226,20 +241,30 @@ typedef struct GameState {
 
 /*
  * What a run is started with. The core takes the values as they are; the app
- * layer decides which ranges a player may pick.
+ * layer decides which ranges a player may pick, and which goals make a mode.
  *
  * start_level  level of the first piece; 0 is treated as 1.
  * das_ticks    ticks a held LEFT/RIGHT waits before it starts repeating.
  * arr_ticks    ticks between two repeats; 0 moves the piece as far as it goes
  *              on every repeat tick.
+ * line_goal    0, or the lines that finish the run: the lock that brings
+ *              lines_cleared to it or past it ends the run with
+ *              GAME_OVER_LINE_GOAL, its full rows removed at once.
+ * tick_limit   0, or the ticks the run lasts: the step that brings tick to it
+ *              ends the run with GAME_OVER_TIME_UP, whatever the phase.
+ * level_up     whether the level rises every ten lines; without it the run
+ *              stays at start_level.
  */
 typedef struct GameConfig {
     uint32_t start_level;
     uint16_t das_ticks;
     uint16_t arr_ticks;
+    uint32_t line_goal;
+    uint32_t tick_limit;
+    bool level_up;
 } GameConfig;
 
-/* Level 1 with GAME_DAS_TICKS and GAME_ARR_TICKS. */
+/* Level 1 with GAME_DAS_TICKS and GAME_ARR_TICKS, no goals, levelling up. */
 GameConfig game_default_config(void);
 
 /*
@@ -258,6 +283,12 @@ void game_init(GameState *game, uint64_t seed);
  * the next level is always 10 lines per level.
  */
 void game_init_at_level(GameState *game, uint64_t seed, uint32_t start_level);
+
+/* True when the run ended by reaching a goal, not by topping out. */
+bool game_run_completed(const GameState *game);
+
+/* Ticks the run has lasted: tick while it runs, end_tick once it is over. */
+uint64_t game_run_ticks(const GameState *game);
 
 /*
  * Changes the shift timing of a running game, for a settings change in the
@@ -291,7 +322,8 @@ void game_set_shift_timing(GameState *game, uint16_t das_ticks, uint16_t arr_tic
  * zero the recorded rows are removed, GAME_EVENT_CLEAR_DONE fires and the next
  * piece spawns (which may end the game with BLOCK_OUT).
  *
- * A game that is over only advances the tick counter.
+ * A game that is over only advances the tick counter. A run with a tick limit
+ * ends on the step that brings tick to the limit.
  */
 void game_step(GameState *game, const GameInput *input);
 
